@@ -55,6 +55,7 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
   const repoRoot = path.resolve(options.repoRoot ?? process.cwd());
   const trace = options.trace ?? true;
   const mode = options.mode ?? 'local';
+  const computedStyle = options.computedStyle ?? 'minimal';
   if (mode === 'hosted' && options.repoRoot === undefined) {
     throw new Error('repoRoot must be provided explicitly in hosted mode');
   }
@@ -138,7 +139,12 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
     let traceStatus: 'skipped' | 'ok' | 'partial' | 'failed' = 'skipped';
     if (trace && regions.length > 0) {
       try {
-        const traced = await traceRegions(page, regions, { repoRoot, design: designPixels, mode });
+        const traced = await traceRegions(page, regions, {
+          repoRoot,
+          design: designPixels,
+          mode,
+          computedStyle,
+        });
         regions = traced.regions;
         traceWarnings.push(...traced.warnings);
         traceStatus = traceWarnings.length > 0 ? 'partial' : 'ok';
@@ -156,13 +162,22 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
     await writeFile(screenshotPath, screenshot);
     await writeFile(diffImagePath, encodePng(analysis.diffImage, viewport.width, viewport.height));
 
+    // Round long floats for compact, token-friendly serialization.
+    const roundedRegions = regions.map((r) => ({
+      ...r,
+      coverage: round5(r.coverage),
+      areaRatio: round5(r.areaRatio),
+      meanDelta: round5(r.meanDelta),
+      maxDelta: round5(r.maxDelta),
+      score: round5(r.score),
+    }));
     return {
       status: analysis.diffRatio <= matchThreshold ? 'match' : 'diff',
-      similarity: 1 - analysis.diffRatio,
+      similarity: round5(1 - analysis.diffRatio),
       diffPixelCount: analysis.diffPixelCount,
       totalPixelCount: analysis.totalPixelCount,
-      diffRatio: analysis.diffRatio,
-      regions,
+      diffRatio: round5(analysis.diffRatio),
+      regions: roundedRegions,
       capture: {
         url,
         viewport: { width: viewport.width, height: viewport.height },
@@ -189,6 +204,10 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
   } finally {
     await browser.close();
   }
+}
+
+function round5(n: number): number {
+  return Math.round(n * 1e5) / 1e5;
 }
 
 function encodePng(rgba: Buffer, width: number, height: number): Buffer {

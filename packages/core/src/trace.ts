@@ -45,6 +45,7 @@ import {
   type SourceMapResolver,
 } from './sourcemap.js';
 import { searchSelectors, type TextMatch } from './search.js';
+import { FileTextCache } from './fileread.js';
 import {
   buildPatches,
   cascadeWinner,
@@ -178,6 +179,8 @@ export interface TraceOptions {
   design: RgbaImage;
   /** Trust boundary for stylesheet/source-map fetching. */
   mode: Mode;
+  /** computedStyle verbosity per region: 'full' | 'minimal' (default) | 'none'. */
+  computedStyle: 'full' | 'minimal' | 'none';
 }
 
 export interface TraceWarnings {
@@ -280,7 +283,7 @@ export async function traceRegions(
 ): Promise<{ regions: DiffRegion[]; warnings: string[] }> {
   const warnings: string[] = [];
   if (regions.length === 0) return { regions, warnings };
-  const { repoRoot, mode } = options;
+  const { repoRoot, mode, computedStyle } = options;
 
   // Sample several points per region (center + quarter points) so the element
   // is found even when the center sits on a transparent/empty spot.
@@ -372,13 +375,21 @@ export async function traceRegions(
       `search truncated: ${matchedSelectors.size} matched selectors, searching the first ${MAX_SEARCH_SELECTORS}`,
     );
   }
+  // One shared file cache: the selector search and the token scan walk the
+  // same repo, so each file is stat'ed once and read at most once.
+  const fileCache = new FileTextCache();
   const searchMatches =
     searchSelectorsToRun.length > 0
-      ? await searchSelectors(repoRoot, searchSelectorsToRun, sheetNearPath(loaded, repoRoot))
+      ? await searchSelectors(
+          repoRoot,
+          searchSelectorsToRun,
+          sheetNearPath(loaded, repoRoot),
+          fileCache,
+        )
       : new Map<string, TextMatch[]>();
 
-  // Design tokens for patch suggestions (one repo walk).
-  const tokens = await findDesignTokens(repoRoot);
+  // Design tokens for patch suggestions (reuses the same file cache).
+  const tokens = await findDesignTokens(repoRoot, fileCache);
 
   const out: DiffRegion[] = [];
   let pointCursor = 0;
@@ -408,6 +419,7 @@ export async function traceRegions(
       mediaResult,
       supportsResult,
       searchMatches,
+      computedStyle,
     );
     const matchedRules = collectMatchedRules(
       picked.element,
@@ -563,6 +575,7 @@ function buildRegionSource(
   mediaResult: Record<string, Applies>,
   supportsResult: Record<string, Applies>,
   searchMatches: Map<string, TextMatch[]>,
+  computedStyleMode: 'full' | 'minimal' | 'none',
 ): RegionSource {
   const elementSelector = el.id
     ? `#${el.id}`
@@ -608,13 +621,50 @@ function buildRegionSource(
       id: el.id,
       classes: el.classes,
       selector: elementSelector,
-      computedStyle: el.computed,
+      computedStyle: trimComputedStyle(el.computed, el.parentComputed, computedStyleMode),
     },
     rules,
     confidence,
     patches: [],
     notes: [],
   };
+}
+
+/** Color-candidate computed properties always kept in 'minimal' mode. */
+const ALWAYS_KEEP_COMPUTED = [
+  'background-color',
+  'color',
+  'border-top-color',
+  'border-right-color',
+  'border-bottom-color',
+  'border-left-color',
+  'outline-color',
+];
+
+/**
+ * Trim the computed-style snapshot per the requested mode. 'minimal' keeps the
+ * color-candidate properties (the diff culprits) plus any property whose value
+ * differs from the element's parent — i.e. what actually makes THIS element
+ * look different — which removes most of the default noise and cuts output
+ * tokens substantially. Internal logic always uses the full snapshot.
+ */
+export function trimComputedStyle(
+  computed: Record<string, string>,
+  parentComputed: Record<string, string>,
+  mode: 'full' | 'minimal' | 'none',
+): Record<string, string> {
+  if (mode === 'none') return {};
+  if (mode === 'full') return computed;
+  const out: Record<string, string> = {};
+  for (const prop of ALWAYS_KEEP_COMPUTED) {
+    if (computed[prop] !== undefined) out[prop] = computed[prop];
+  }
+  for (const [prop, value] of Object.entries(computed)) {
+    if (ALWAYS_KEEP_COMPUTED.includes(prop)) continue;
+    if (parentComputed[prop] === value) continue; // inherited/unchanged vs parent
+    out[prop] = value;
+  }
+  return out;
 }
 
 /** Best text-search match for a selector → source + confidence. */

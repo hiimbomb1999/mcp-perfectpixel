@@ -133,17 +133,18 @@ pnpm --filter mcp-perfectpixel start
 
 Screenshots `url`, diffs it against `designImagePath`, returns regions + artifacts.
 
-| Argument          | Type                  | Description                                                                                                                                                   |
-| ----------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `url`             | `string` (required)   | Live URL to screenshot — `http(s)` or `file` URL.                                                                                                             |
-| `designImagePath` | `string` (required)   | Path to the static design image (`.png`, `.jpg`, `.jpeg`) **or an http(s) image URL** (e.g. a Figma export link).                                             |
-| `viewport`        | `{width, height}`     | CSS-pixel viewport. Defaults to the design image's dimensions.                                                                                                |
-| `outputDir`       | `string`              | Where to write artifacts. Defaults to a fresh temp dir.                                                                                                       |
-| `waitForSelector` | `string`              | CSS selector to wait for before screenshotting.                                                                                                               |
-| `waitMs`          | `number`              | Extra settle time after load, in ms.                                                                                                                          |
-| `diffThreshold`   | `number` (0–1)        | pixelmatch sensitivity. Smaller = more sensitive. Default `0.1`.                                                                                              |
-| `repoRoot`        | `string`              | Codebase root for source tracing (text-search fallback). Defaults to the server cwd.                                                                          |
-| `mode`            | `"local" \| "hosted"` | Trust boundary. `local` (default) allows `file://` and local paths; `hosted` blocks them and private-network hosts (SSRF protection) and requires `repoRoot`. |
+| Argument          | Type                            | Description                                                                                                                                                                                                          |
+| ----------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `url`             | `string` (required)             | Live URL to screenshot — `http(s)` or `file` URL.                                                                                                                                                                    |
+| `designImagePath` | `string` (required)             | Path to the static design image (`.png`, `.jpg`, `.jpeg`) **or an http(s) image URL** (e.g. a Figma export link).                                                                                                    |
+| `viewport`        | `{width, height}`               | CSS-pixel viewport. Defaults to the design image's dimensions.                                                                                                                                                       |
+| `outputDir`       | `string`                        | Where to write artifacts. Defaults to a fresh temp dir.                                                                                                                                                              |
+| `waitForSelector` | `string`                        | CSS selector to wait for before screenshotting.                                                                                                                                                                      |
+| `waitMs`          | `number`                        | Extra settle time after load, in ms.                                                                                                                                                                                 |
+| `diffThreshold`   | `number` (0–1)                  | pixelmatch sensitivity. Smaller = more sensitive. Default `0.1`.                                                                                                                                                     |
+| `repoRoot`        | `string`                        | Codebase root for source tracing (text-search fallback). Defaults to the server cwd.                                                                                                                                 |
+| `mode`            | `"local" \| "hosted"`           | Trust boundary. `local` (default) allows `file://` and local paths; `hosted` blocks them and private-network hosts (SSRF protection) and requires `repoRoot`.                                                        |
+| `computedStyle`   | `"minimal" \| "full" \| "none"` | Computed-style verbosity per region. `minimal` (default) keeps color-candidate properties + values differing from the parent (~70% fewer properties, ~37% smaller payload); `full` returns all 50+; `none` omits it. |
 
 The tool declares an **output schema**, so MCP clients receive a typed
 `structuredContent` payload (plus the JSON text) without parsing strings. The
@@ -375,6 +376,10 @@ node examples/demo.mjs /tmp/design.png https://localhost:3000
 - **Honest tracing** — failures and truncations are reported via
   `trace.status` / `trace.warnings`; text-search matches in tests/docs/generated
   files are deprioritized and lower confidence.
+- **Token-friendly output** — long floats are rounded, computed style is
+  trimmed to what matters by default (`computedStyle: "minimal"`), and repo
+  walks share one stat/mtime file cache with parallel reads — measured ~37%
+  smaller payloads and ~58% faster capture+trace on a real workspace.
 - **Secret hygiene** — `.env`/`.npmrc` are gitignored; CI runs Gitleaks and the
   publish workflow runs lint + the full test suite before releasing.
 

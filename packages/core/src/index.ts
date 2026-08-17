@@ -11,7 +11,8 @@ export {
   normalizeColor,
   sampleDesignColor,
 } from './patches.js';
-export { pickElement, regionSamplePoints } from './trace.js';
+export { pickElement, regionSamplePoints, trimComputedStyle } from './trace.js';
+export { FileTextCache } from './fileread.js';
 export { assertTargetAllowed, classifyTarget, isPrivateNetworkHost } from './security.js';
 export {
   assertViewportOk,

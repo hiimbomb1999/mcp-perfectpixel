@@ -10,9 +10,10 @@
  * already defines (CSS custom properties, Tailwind config, style-dictionary
  * JSON), the token reference is suggested instead of a new hardcoded value.
  */
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { GitignoreMatcher } from './search.js';
+import { FileTextCache } from './fileread.js';
 import { compareSpecificity, type Specificity } from './css.js';
 import type { Confidence, RgbaImage, SourceLocation } from './types.js';
 
@@ -175,19 +176,26 @@ export function normalizeColor(value: string): string | null {
 
 /**
  * Scan `repoRoot` for design tokens: CSS custom properties, Tailwind configs,
- * and style-dictionary JSON. Gitignore-aware — build output is skipped.
+ * and style-dictionary JSON. Gitignore-aware — build output is skipped. Reads
+ * go through the shared FileTextCache so a capture's repo walk reads each file
+ * once (the selector search and this scan share it).
  */
-export async function findDesignTokens(repoRoot: string): Promise<DesignToken[]> {
+export async function findDesignTokens(
+  repoRoot: string,
+  cache: FileTextCache = new FileTextCache(),
+): Promise<DesignToken[]> {
   const matcher = new GitignoreMatcher(repoRoot);
   const tokens: DesignToken[] = [];
-  await walkRepo(repoRoot, matcher, async (relPath, absPath) => {
+  await walkRepo(repoRoot, matcher, async (relPath) => {
+    const text = await cache.read(repoRoot, relPath);
+    if (text === null) return;
     const lower = relPath.toLowerCase();
     if (/\.(css|scss|less|styl)$/.test(lower)) {
-      await scanCssVariables(absPath, relPath, tokens);
+      scanCssVariables(text, relPath, tokens);
     } else if (/tailwind\.config\./.test(lower) && /\.(js|cjs|mjs|ts)$/.test(lower)) {
-      await scanTailwindConfig(absPath, relPath, tokens);
+      scanTailwindConfig(text, relPath, tokens);
     } else if (/\.json$/.test(lower) && /token/.test(lower)) {
-      await scanStyleDictionary(absPath, relPath, tokens);
+      scanStyleDictionary(text, relPath, tokens);
     }
   });
   return tokens;
@@ -435,13 +443,7 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
 }
 
-async function scanCssVariables(
-  absPath: string,
-  relPath: string,
-  tokens: DesignToken[],
-): Promise<void> {
-  const text = await readText(absPath);
-  if (!text) return;
+function scanCssVariables(text: string, relPath: string, tokens: DesignToken[]): void {
   const re = /(--[a-zA-Z0-9_-]+)\s*:\s*([^;{}]+);/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
@@ -459,13 +461,7 @@ async function scanCssVariables(
   }
 }
 
-async function scanTailwindConfig(
-  absPath: string,
-  relPath: string,
-  tokens: DesignToken[],
-): Promise<void> {
-  const text = await readText(absPath);
-  if (!text) return;
+function scanTailwindConfig(text: string, relPath: string, tokens: DesignToken[]): void {
   const re =
     /['"]?([a-zA-Z0-9_-]+)['"]?\s*:\s*['"](#[0-9a-fA-F]{3,8}|rgb\([^)]*\)|hsl\([^)]*\))['"]/g;
   let m: RegExpExecArray | null;
@@ -484,13 +480,7 @@ async function scanTailwindConfig(
   }
 }
 
-async function scanStyleDictionary(
-  absPath: string,
-  relPath: string,
-  tokens: DesignToken[],
-): Promise<void> {
-  const text = await readText(absPath);
-  if (!text) return;
+function scanStyleDictionary(text: string, relPath: string, tokens: DesignToken[]): void {
   let json: unknown;
   try {
     json = JSON.parse(text);
@@ -522,18 +512,6 @@ async function scanStyleDictionary(
   walk(json, '');
 }
 
-async function readText(absPath: string): Promise<string | null> {
-  try {
-    const size = (await stat(absPath)).size;
-    if (size > 5 * 1024 * 1024) return null; // check with stat() before reading
-    const buf = await readFile(absPath);
-    if (buf.length > 0 && buf.subarray(0, 8192).includes(0)) return null; // binary
-    return buf.toString('utf8');
-  } catch {
-    return null;
-  }
-}
-
 function lineOf(text: string, index: number): number {
   let line = 1;
   for (let i = 0; i < index && i < text.length; i++) {
@@ -545,7 +523,7 @@ function lineOf(text: string, index: number): number {
 async function walkRepo(
   root: string,
   matcher: GitignoreMatcher,
-  visit: (relPath: string, absPath: string) => Promise<void>,
+  visit: (relPath: string) => Promise<void>,
 ): Promise<void> {
   const walk = async (dirRel: string): Promise<void> => {
     const absDir = path.join(root, dirRel);
@@ -563,7 +541,7 @@ async function walkRepo(
         await walk(rel);
       } else if (entry.isFile()) {
         if (await matcher.isIgnored(rel)) continue;
-        await visit(rel, path.join(root, rel));
+        await visit(rel);
       }
     }
   };

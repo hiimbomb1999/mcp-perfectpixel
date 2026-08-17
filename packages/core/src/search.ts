@@ -6,9 +6,10 @@
  * gitignored paths are still reported but flagged so they can be
  * deprioritized (build output, not the real source).
  */
-import { readdir, readFile, stat as fstat } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import ignore, { type Ignore } from 'ignore';
+import { FileTextCache } from './fileread.js';
 
 export type MatchContext = 'source-css' | 'source' | 'test' | 'docs' | 'generated';
 
@@ -34,9 +35,7 @@ export interface TextMatch {
 
 const ALWAYS_IGNORED_DIRS = new Set(['.git', 'node_modules']);
 
-const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_MATCHES_PER_SELECTOR = 25;
-const BINARY_SNIFF_BYTES = 8192;
 
 const CSS_EXT = /\.(css|scss|less|styl)$/i;
 const TEST_PATH = /(^|\/)(__tests__|tests?|specs?)(\/|\.)/i;
@@ -128,13 +127,14 @@ export async function searchSelectors(
   root: string,
   selectors: string[],
   near?: string,
+  cache: FileTextCache = new FileTextCache(),
 ): Promise<Map<string, TextMatch[]>> {
   const matcher = new GitignoreMatcher(root);
   const wanted = new Set(selectors.filter((s) => s.length > 0));
   const results = new Map<string, FileHit[]>();
   for (const s of wanted) results.set(s, []);
 
-  await walk(root, '', matcher, results, wanted);
+  await walk(root, '', matcher, results, wanted, cache);
 
   const nearDir = near ? path.posix.dirname(near) : '';
   const contextRank: Record<MatchContext, number> = {
@@ -195,35 +195,55 @@ function directoryDistance(file: string, nearDir: string): number {
   return parts.length - common;
 }
 
+/** Max concurrent file reads during a repo walk. */
+const SCAN_CONCURRENCY = 16;
+
 async function walk(
   root: string,
   dirRel: string,
   matcher: GitignoreMatcher,
   results: Map<string, FileHit[]>,
   wanted: Set<string>,
+  cache: FileTextCache,
 ): Promise<void> {
   if (saturated(results, wanted)) return;
-  const absDir = path.join(root, dirRel);
-  let entries;
-  try {
-    entries = await readdir(absDir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (saturated(results, wanted)) return;
-    const rel = dirRel === '' ? entry.name : `${dirRel}/${entry.name}`;
-    if (entry.isDirectory()) {
-      // .git and node_modules are never worth searching — this is the one
-      // hard skip (mirrors ripgrep's --glob '!node_modules'). Everything else
-      // (dist/, build/, vendor/, ...) is walked and flagged gitignored so
-      // build-output matches are reported but deprioritized.
-      if (ALWAYS_IGNORED_DIRS.has(entry.name)) continue;
-      await walk(root, rel, matcher, results, wanted);
-    } else if (entry.isFile()) {
-      await scanFile(root, rel, matcher, results, wanted);
+  // Collect candidate files first (cheap readdirs), then scan them with a
+  // bounded worker pool so big repos don't serialize every file read.
+  const files: string[] = [];
+  const collect = async (rel: string): Promise<void> => {
+    const absDir = path.join(root, rel);
+    let entries;
+    try {
+      entries = await readdir(absDir, { withFileTypes: true });
+    } catch {
+      return;
     }
-  }
+    for (const entry of entries) {
+      const child = rel === '' ? entry.name : `${rel}/${entry.name}`;
+      if (entry.isDirectory()) {
+        // .git and node_modules are never worth searching — the one hard skip
+        // (mirrors ripgrep's --glob '!node_modules'). Everything else is walked
+        // and flagged gitignored so build-output matches are deprioritized.
+        if (ALWAYS_IGNORED_DIRS.has(entry.name)) continue;
+        await collect(child);
+      } else if (entry.isFile()) {
+        files.push(child);
+      }
+    }
+  };
+  await collect(dirRel);
+
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < files.length && !saturated(results, wanted)) {
+      const rel = files[next]!;
+      next++;
+      await scanFile(root, rel, matcher, results, wanted, cache);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(SCAN_CONCURRENCY, Math.max(1, files.length)) }, () => worker()),
+  );
 }
 
 /** True when every selector already has enough non-ignored matches. */
@@ -242,30 +262,12 @@ async function scanFile(
   matcher: GitignoreMatcher,
   results: Map<string, FileHit[]>,
   wanted: Set<string>,
+  cache: FileTextCache,
 ): Promise<void> {
-  const absPath = path.join(root, relPath);
-  // Check size with stat() BEFORE reading, so huge files never get loaded.
-  let size: number;
-  try {
-    size = (await fstat(absPath)).size;
-  } catch {
-    return;
-  }
-  if (size > MAX_FILE_BYTES) return;
-  let buffer: Buffer;
-  try {
-    buffer = await readFile(absPath);
-  } catch {
-    return;
-  }
-  if (buffer.length > 0 && buffer.subarray(0, BINARY_SNIFF_BYTES).includes(0)) return; // binary
-
-  let text: string;
-  try {
-    text = buffer.toString('utf8');
-  } catch {
-    return;
-  }
+  // Shared cache: stat'ed once, read at most once per capture (the token scan
+  // reuses the same cache). Huge/binary files are never read.
+  const text = await cache.read(root, relPath);
+  if (text === null) return;
   // Fast path: nothing to look for in this file.
   let any = false;
   for (const s of wanted) {

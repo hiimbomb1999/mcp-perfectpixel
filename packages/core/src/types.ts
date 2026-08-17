@@ -41,6 +41,13 @@ export interface CaptureOptions {
    */
   mode?: 'local' | 'hosted';
   /**
+   * How much computed style to include per region: 'minimal' (default) keeps
+   * the color-candidate properties plus any value that differs from the
+   * element's parent (token-friendly); 'full' returns all 50+ properties;
+   * 'none' omits computed style entirely.
+   */
+  computedStyle?: 'full' | 'minimal' | 'none';
+  /**
    * Resolve each diff region to a DOM element and a best-effort source
    * location (CSS source maps first, then gitignore-aware text search).
    * Default true.
