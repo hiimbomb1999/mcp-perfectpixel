@@ -1,17 +1,20 @@
 /**
  * Goal 3 — minimal patch output, never a rewrite.
  *
- * For each traced rule that declares a color-ish property, derive the design's
- * intended value from the design image pixels at the region, and suggest the
- * smallest possible change: `file:line:column`, `property`, `current ->
- * suggested`. When the suggested color matches a token the project already
- * defines (CSS custom properties, Tailwind config, style-dictionary JSON), the
- * token reference is suggested instead of a new hardcoded value.
+ * For each diff region, derive the design's intended color from the design
+ * image pixels, pick the SINGLE property most likely to have caused the diff
+ * (background first, then text color, then borders/outline), resolve the CSS
+ * cascade winner for that property (specificity, declaration order,
+ * !important), and suggest the smallest change: `file:line:column`, `property`,
+ * `current -> suggested`. When the suggested color matches a token the project
+ * already defines (CSS custom properties, Tailwind config, style-dictionary
+ * JSON), the token reference is suggested instead of a new hardcoded value.
  */
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { GitignoreMatcher } from './search.js';
-import type { Confidence, RgbaImage, RuleEvidence } from './types.js';
+import { compareSpecificity, type Specificity } from './css.js';
+import type { Confidence, RgbaImage, SourceLocation } from './types.js';
 
 /** Color-like properties a patch can target. */
 const COLOR_PROPS = new Set([
@@ -26,6 +29,27 @@ const COLOR_PROPS = new Set([
   'outline',
   'outline-color',
 ]);
+
+/** Computed longhands checked, in preference order, to find the diff cause. */
+const COMPUTED_COLOR_ORDER = [
+  'background-color',
+  'color',
+  'border-top-color',
+  'border-right-color',
+  'border-bottom-color',
+  'border-left-color',
+  'outline-color',
+];
+
+/** Shorthands that cascade into each longhand (for winner lookup + patch). */
+const SHORTHAND_COVER: Record<string, string[]> = {
+  'background-color': ['background'],
+  'border-top-color': ['border-color', 'border'],
+  'border-right-color': ['border-color', 'border'],
+  'border-bottom-color': ['border-color', 'border'],
+  'border-left-color': ['border-color', 'border'],
+  'outline-color': ['outline'],
+};
 
 export type TokenKind = 'css-variable' | 'tailwind' | 'style-dictionary';
 
@@ -169,45 +193,165 @@ export async function findDesignTokens(repoRoot: string): Promise<DesignToken[]>
   return tokens;
 }
 
-/** Build patch suggestions for a region from its matched rules. */
+/** A matched rule with the cascade metadata patch selection needs. */
+export interface PatchRuleInput {
+  selector: string;
+  specificity: Specificity;
+  sheetId: number;
+  index: number;
+  important: ReadonlySet<string>;
+  properties: string[];
+  declared: Record<string, string>;
+  source: SourceLocation | null;
+  confidence: Confidence;
+}
+
+/**
+ * Build at most ONE patch suggestion per region: the cascade-winning rule of
+ * the single property most likely to have caused the diff.
+ */
 export function buildPatches(
   design: RgbaImage,
   region: { x: number; y: number; width: number; height: number },
-  rules: RuleEvidence[],
+  matched: PatchRuleInput[],
+  elementComputed: Record<string, string>,
   tokens: DesignToken[],
 ): PatchSuggestion[] {
   const designHex = sampleDesignColor(design, region);
-  if (!designHex) return [];
+  if (!designHex || matched.length === 0) return [];
   const tokensByValue = new Map<string, DesignToken[]>();
   for (const token of tokens) {
     const list = tokensByValue.get(token.value) ?? [];
     list.push(token);
     tokensByValue.set(token.value, list);
   }
-  const patches: PatchSuggestion[] = [];
-  for (const rule of rules) {
-    if (!rule.source) continue; // no anchor -> leave it to the agent's evidence
-    for (const prop of rule.properties) {
-      if (!COLOR_PROPS.has(prop)) continue;
-      const current = rule.declared[prop];
-      if (current === undefined) continue;
-      const currentHex = normalizeColor(current);
-      if (currentHex === null || currentHex === designHex) continue; // already matches
-      const token = preferToken(tokensByValue.get(designHex) ?? []);
-      patches.push({
-        file: rule.source.file,
-        line: rule.source.line,
-        column: rule.source.column,
-        property: prop,
-        current,
-        suggested: token ? token.reference : designHex,
-        value: designHex,
-        token,
-        confidence: rule.confidence,
-      });
+
+  // 1) Most likely culprit: the first computed color property that differs
+  //    from the design (background dominates the region's pixels, then text
+  //    color, then borders, then outline) — never patch them all at once.
+  let chosenProp: string | null = null;
+  let sawParseableComputed = false;
+  for (const prop of COMPUTED_COLOR_ORDER) {
+    const computedVal = elementComputed[prop];
+    if (!computedVal) continue;
+    const norm = normalizeColor(computedVal);
+    if (norm === null) continue; // e.g. transparent / gradient — no pixel anchor
+    sawParseableComputed = true;
+    if (norm !== designHex) {
+      chosenProp = prop;
+      break;
     }
   }
-  return patches;
+  // 2) Fallback only when computed values are unavailable (nothing to compare):
+  //    the declared color property differing most from the design. If the
+  //    computed colors are parseable and all match the design, the rendering
+  //    already matches — patching a declared value would change nothing.
+  if (chosenProp === null && !sawParseableComputed) {
+    let bestProp: string | null = null;
+    let bestDelta = -1;
+    for (const m of matched) {
+      for (const prop of m.properties) {
+        if (!COLOR_PROPS.has(prop)) continue;
+        const norm = normalizeColor(m.declared[prop] ?? '');
+        if (norm === null || norm === designHex) continue;
+        const delta = colorDistance(norm, designHex);
+        if (delta > bestDelta) {
+          bestDelta = delta;
+          bestProp = prop;
+        }
+      }
+    }
+    chosenProp = bestProp;
+  }
+  if (chosenProp === null) return [];
+
+  // 3) Cascade winner for the chosen property.
+  const winner = cascadeWinner(matched, chosenProp);
+  if (!winner || !winner.source) return [];
+
+  // The property as actually declared (longhand or covering shorthand).
+  const declaredProp = declaredFor(winner, chosenProp);
+  const current = declaredProp ? winner.declared[declaredProp] : undefined;
+  if (current === undefined) return [];
+  const currentHex = normalizeColor(current);
+  if (currentHex === null || currentHex === designHex) return [];
+
+  const token = preferToken(tokensByValue.get(designHex) ?? []);
+  return [
+    {
+      file: winner.source.file,
+      line: winner.source.line,
+      column: winner.source.column,
+      property: declaredProp ?? chosenProp,
+      current,
+      suggested: token ? token.reference : designHex,
+      value: designHex,
+      token,
+      confidence: winner.confidence,
+    },
+  ];
+}
+
+/** The property name a rule declares that covers `prop` (or null). */
+function declaredFor(rule: PatchRuleInput, prop: string): string | null {
+  if (rule.declared[prop] !== undefined) return prop;
+  for (const cover of SHORTHAND_COVER[prop] ?? []) {
+    if (rule.declared[cover] !== undefined) return cover;
+  }
+  return null;
+}
+
+/**
+ * The rule that wins the cascade for `prop` among the matched rules:
+ * !important beats normal, then highest specificity, then latest in document
+ * order (sheet order, then rule index). Shorthand declarations participate in
+ * the cascade of the longhands they cover.
+ */
+export function cascadeWinner(matched: PatchRuleInput[], prop: string): PatchRuleInput | null {
+  const covers = SHORTHAND_COVER[prop] ?? [];
+  const participates = (m: PatchRuleInput): boolean =>
+    m.declared[prop] !== undefined || covers.some((c) => m.declared[c] !== undefined);
+  const isImportant = (m: PatchRuleInput): boolean =>
+    m.important.has(prop) || covers.some((c) => m.important.has(c));
+
+  let winner: PatchRuleInput | null = null;
+  for (const m of matched) {
+    if (!participates(m)) continue;
+    if (!winner) {
+      winner = m;
+      continue;
+    }
+    const impM = isImportant(m);
+    const impW = isImportant(winner);
+    if (impM !== impW) {
+      if (impM) winner = m;
+      continue;
+    }
+    const cmp = compareSpecificity(m.specificity, winner.specificity);
+    if (cmp > 0) {
+      winner = m;
+      continue;
+    }
+    if (cmp < 0) continue;
+    if (m.sheetId > winner.sheetId || (m.sheetId === winner.sheetId && m.index > winner.index)) {
+      winner = m;
+    }
+  }
+  return winner;
+}
+
+function colorDistance(a: string, b: string): number {
+  const [ar, ag, ab] = hexToRgb(a);
+  const [br, bg, bb] = hexToRgb(b);
+  return Math.sqrt((ar - br) ** 2 + (ag - bg) ** 2 + (ab - bb) ** 2);
+}
+
+function hexToRgb(hex: string): [number, number, number] {
+  return [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ];
 }
 
 /** Pick the most directly usable token among matches. */

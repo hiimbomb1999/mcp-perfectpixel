@@ -109,10 +109,17 @@ export interface ElementEvidence {
 /** One CSS rule that matched the region's element. */
 export interface RuleEvidence {
   selector: string;
-  /** Media/container condition chain, e.g. "(max-width: 600px)". Null when unconditional. */
+  /** @media condition chain, e.g. "(max-width: 600px)". Null when unconditional. */
   media: string | null;
-  /** Whether the rule's media conditions currently apply. */
-  applies: boolean;
+  /** @supports condition chain. Null when unconditional. */
+  supports: string | null;
+  /** @container condition chain. Null when unconditional. */
+  container: string | null;
+  /**
+   * Whether the rule's conditions currently apply: 'yes' / 'no', or 'unknown'
+   * when they can't be evaluated from the outside (e.g. container queries).
+   */
+  applies: 'yes' | 'no' | 'unknown';
   /** Visually relevant properties this rule declares. */
   properties: string[];
   /** The rule's declared values for those properties. */
@@ -215,6 +222,15 @@ export interface DiffResult {
   regions: DiffRegion[];
   capture: CaptureInfo;
   artifacts: DiffArtifacts;
+  /**
+   * Source-tracing outcome: 'skipped' (no regions / tracing disabled), 'ok',
+   * 'partial' (some warnings), or 'failed' (tracing errored — regions fall
+   * back to untraced evidence). Warnings are never silently swallowed.
+   */
+  trace: {
+    status: 'skipped' | 'ok' | 'partial' | 'failed';
+    warnings: string[];
+  };
   /** Codebase root used for source tracing (resolved absolute path). */
   repoRoot: string;
 }

@@ -149,7 +149,7 @@ describe('region source tracing (CSS source maps, then text search, then DOM evi
     });
     expect(buttonRule.properties).toContain('background-color');
     expect(buttonRule.declared['background-color']).toBe('#dc2626');
-    expect(buttonRule.applies).toBe(true);
+    expect(buttonRule.applies).toBe('yes');
 
     const header = regionOf(result, 'header')!;
     const headerRule = header.source!.rules.find((r) => r.selector === '.header')!;

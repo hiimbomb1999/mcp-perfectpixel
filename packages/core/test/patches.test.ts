@@ -7,8 +7,9 @@ import {
   findDesignTokens,
   normalizeColor,
   sampleDesignColor,
+  type PatchRuleInput,
 } from '@mcp-perfectpixel/core';
-import type { DiffRegion, RgbaImage, RuleEvidence } from '@mcp-perfectpixel/core';
+import type { RgbaImage } from '@mcp-perfectpixel/core';
 
 function makeImage(width: number, height: number, fill: [number, number, number]): RgbaImage {
   const data = Buffer.alloc(width * height * 4);
@@ -132,23 +133,38 @@ describe('findDesignTokens', () => {
 });
 
 describe('buildPatches', () => {
-  function rule(overrides: Partial<RuleEvidence>): RuleEvidence {
+  const SOURCE = {
+    file: 'src/_page.scss',
+    line: 5,
+    column: 3,
+    via: 'source-map' as const,
+    gitignored: false,
+  };
+
+  function rule(overrides: Partial<PatchRuleInput>): PatchRuleInput {
     return {
       selector: '.button',
-      media: null,
-      applies: true,
+      specificity: { a: 0, b: 1, c: 0 },
+      sheetId: 0,
+      index: 0,
+      important: new Set<string>(),
       properties: ['background-color'],
       declared: { 'background-color': '#dc2626' },
-      source: { file: 'src/_page.scss', line: 5, column: 3, via: 'source-map', gitignored: false },
+      source: SOURCE,
       confidence: 'high',
       ...overrides,
     };
   }
 
-  it('suggests the design color as a token reference when a token matches', () => {
+  const GREEN_DESIGN = () => {
     const design = makeImage(100, 100, [255, 255, 255]);
     paint(design, 20, 20, 10, 10, [22, 163, 74]); // #16a34a
-    const region = { x: 20, y: 20, width: 10, height: 10 } as DiffRegion;
+    return design;
+  };
+  const REGION = { x: 20, y: 20, width: 10, height: 10 };
+  const COMPUTED_DIFFERS = { 'background-color': 'rgb(220, 38, 38)' };
+
+  it('suggests the design color as a token reference when a token matches', () => {
     const tokens = [
       {
         name: '--color-success',
@@ -159,7 +175,7 @@ describe('buildPatches', () => {
         kind: 'css-variable' as const,
       },
     ];
-    const patches = buildPatches(design, region, [rule({})], tokens);
+    const patches = buildPatches(GREEN_DESIGN(), REGION, [rule({})], COMPUTED_DIFFERS, tokens);
     expect(patches).toHaveLength(1);
     expect(patches[0]).toMatchObject({
       file: 'src/_page.scss',
@@ -175,46 +191,120 @@ describe('buildPatches', () => {
   });
 
   it('falls back to the raw hex when no token matches', () => {
-    const design = makeImage(100, 100, [255, 255, 255]);
-    paint(design, 20, 20, 10, 10, [22, 163, 74]);
-    const patches = buildPatches(design, { x: 20, y: 20, width: 10, height: 10 }, [rule({})], []);
+    const patches = buildPatches(GREEN_DESIGN(), REGION, [rule({})], COMPUTED_DIFFERS, []);
     expect(patches[0]!.suggested).toBe('#16a34a');
     expect(patches[0]!.token).toBeNull();
   });
 
   it('skips rules without an anchorable source', () => {
-    const design = makeImage(100, 100, [255, 255, 255]);
-    paint(design, 20, 20, 10, 10, [22, 163, 74]);
     const patches = buildPatches(
-      design,
-      { x: 20, y: 20, width: 10, height: 10 },
+      GREEN_DESIGN(),
+      REGION,
       [rule({ source: null })],
+      COMPUTED_DIFFERS,
       [],
     );
     expect(patches).toEqual([]);
   });
 
-  it('skips properties whose declared value already matches the design', () => {
+  it('skips when the current value already matches the design', () => {
     const design = makeImage(100, 100, [255, 255, 255]);
     paint(design, 20, 20, 10, 10, [220, 38, 38]); // #dc2626 = current
-    const patches = buildPatches(design, { x: 20, y: 20, width: 10, height: 10 }, [rule({})], []);
+    const patches = buildPatches(design, REGION, [rule({})], COMPUTED_DIFFERS, []);
     expect(patches).toEqual([]);
   });
 
-  it('emits one patch per differing color property', () => {
-    const design = makeImage(100, 100, [255, 255, 255]);
-    paint(design, 20, 20, 10, 10, [22, 163, 74]);
+  it('emits ONE patch — the most likely culprit — never patch every color prop', () => {
+    // Both background-color AND color differ in the computed style, but only
+    // background-color may be patched (preference order), and only once.
     const patches = buildPatches(
-      design,
-      { x: 20, y: 20, width: 10, height: 10 },
+      GREEN_DESIGN(),
+      REGION,
       [
         rule({
-          properties: ['background-color', 'border-color'],
-          declared: { 'background-color': '#dc2626', 'border-color': '#111111' },
+          properties: ['background-color', 'color'],
+          declared: { 'background-color': '#dc2626', color: '#111111' },
         }),
       ],
+      { 'background-color': 'rgb(220, 38, 38)', color: 'rgb(17, 17, 17)' },
       [],
     );
-    expect(patches.map((p) => p.property).sort()).toEqual(['background-color', 'border-color']);
+    expect(patches).toHaveLength(1);
+    expect(patches[0]!.property).toBe('background-color');
+  });
+
+  it('picks the cascade winner: higher specificity wins', () => {
+    const base = rule({ index: 0 });
+    const moreSpecific = rule({
+      selector: '.button.primary',
+      specificity: { a: 0, b: 2, c: 0 },
+      index: 1,
+      source: { ...SOURCE, line: 9 },
+    });
+    const patches = buildPatches(
+      GREEN_DESIGN(),
+      REGION,
+      [base, moreSpecific],
+      COMPUTED_DIFFERS,
+      [],
+    );
+    expect(patches).toHaveLength(1);
+    expect(patches[0]!.line).toBe(9); // winner is .button.primary
+  });
+
+  it('picks the cascade winner: !important beats specificity', () => {
+    const important = rule({
+      specificity: { a: 0, b: 1, c: 0 },
+      index: 1,
+      important: new Set(['background-color']),
+      source: { ...SOURCE, line: 7 },
+    });
+    const moreSpecific = rule({
+      selector: '.button.primary',
+      specificity: { a: 0, b: 2, c: 0 },
+      index: 0,
+      source: { ...SOURCE, line: 9 },
+    });
+    const patches = buildPatches(
+      GREEN_DESIGN(),
+      REGION,
+      [important, moreSpecific],
+      COMPUTED_DIFFERS,
+      [],
+    );
+    expect(patches[0]!.line).toBe(7); // !important wins
+  });
+
+  it('picks the cascade winner: same specificity -> later declaration wins', () => {
+    const first = rule({ index: 0, source: { ...SOURCE, line: 4 } });
+    const second = rule({ index: 2, source: { ...SOURCE, line: 6 } });
+    const patches = buildPatches(GREEN_DESIGN(), REGION, [first, second], COMPUTED_DIFFERS, []);
+    expect(patches[0]!.line).toBe(6); // later rule wins
+  });
+
+  it('handles shorthand declarations (background covers background-color)', () => {
+    const patches = buildPatches(
+      GREEN_DESIGN(),
+      REGION,
+      [rule({ properties: ['background'], declared: { background: '#dc2626' } })],
+      COMPUTED_DIFFERS,
+      [],
+    );
+    expect(patches).toHaveLength(1);
+    expect(patches[0]!.property).toBe('background');
+    expect(patches[0]!.current).toBe('#dc2626');
+  });
+
+  it('emits nothing when the diff is not color-related', () => {
+    // Computed colors all match the design; no declared color prop differs.
+    const design = GREEN_DESIGN();
+    const patches = buildPatches(
+      design,
+      REGION,
+      [rule({})],
+      { 'background-color': 'rgb(22, 163, 74)' },
+      [],
+    );
+    expect(patches).toEqual([]);
   });
 });

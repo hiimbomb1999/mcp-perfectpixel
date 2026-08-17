@@ -108,13 +108,22 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
     const analysis = diffImages(designPixels, screenshotPixels, { threshold: diffThreshold });
 
     // Goal 2+3: resolve each region to a DOM element, real source location, and
-    // minimal patch suggestions. Best-effort — failures never fail the capture.
+    // minimal patch suggestions. Best-effort — failures never fail the capture,
+    // but they ARE reported through result.trace instead of being swallowed.
     let regions = analysis.regions;
+    let traceStatus: 'skipped' | 'ok' | 'partial' | 'failed' = 'skipped';
+    let traceWarnings: string[] = [];
     if (trace && regions.length > 0) {
       try {
-        regions = await traceRegions(page, regions, { repoRoot, design: designPixels });
-      } catch {
-        // Fall back to untraced regions (source: null) on any tracing error.
+        const traced = await traceRegions(page, regions, { repoRoot, design: designPixels });
+        regions = traced.regions;
+        traceStatus = traced.warnings.length > 0 ? 'partial' : 'ok';
+        traceWarnings = traced.warnings;
+      } catch (error) {
+        traceStatus = 'failed';
+        traceWarnings = [
+          `source tracing failed: ${error instanceof Error ? error.message : String(error)}`,
+        ];
       }
     }
 
@@ -147,6 +156,7 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
         diffImagePath,
         designImagePath: path.resolve(designImagePath),
       },
+      trace: { status: traceStatus, warnings: traceWarnings },
       repoRoot,
     };
   } finally {

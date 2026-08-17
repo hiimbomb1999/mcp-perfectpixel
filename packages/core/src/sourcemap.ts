@@ -15,9 +15,16 @@ for (let i = 0; i < BASE64_CHARS.length; i++) {
 export interface SourceMapV3 {
   version: number;
   sources: string[];
+  /** Prepended to every source path (relative to the map's URL). */
+  sourceRoot?: string;
   sourcesContent?: Array<string | null>;
   names?: string[];
   mappings: string;
+  /** Indexed source maps split the generated file into sections. */
+  sections?: Array<{
+    offset: { line: number; column: number };
+    map: SourceMapV3;
+  }>;
 }
 
 export interface Segment {
@@ -103,6 +110,11 @@ export function decodeMappings(mappings: string): Map<number, Segment[]> {
       origCol += cDelta;
       seg = { genCol, srcIdx, origLine, origCol };
       next = afterCol2;
+      // Optional 5th field (name index) — decode and discard.
+      if (next < mappings.length && mappings[next] !== ',' && mappings[next] !== ';') {
+        const [, afterName] = decodeVLQ(mappings, next);
+        next = afterName;
+      }
     } else {
       seg = { genCol, srcIdx: -1, origLine: 0, origCol: 0 };
     }
@@ -173,6 +185,98 @@ export function mapOffset(
 ): OriginalPosition | null {
   const { line, column } = offsetToLineCol(cssText, offset);
   return originalPositionFor(segmentsByLine, line, column);
+}
+
+export interface ResolvedPosition {
+  /** Index into the resolver's flattened source list. */
+  sourceIndex: number;
+  /** 0-based line. */
+  line: number;
+  /** 0-based column. */
+  column: number;
+}
+
+export interface SourceMapResolver {
+  /** Original position covering generated (line, column), or null. */
+  resolve(genLine: number, genCol: number): ResolvedPosition | null;
+  /** Raw source path (sourceRoot already joined) for a source index. */
+  sourcePath(sourceIndex: number): string;
+  /** The map's sourceRoot, when any. */
+  sourceRoot: string | null;
+}
+
+/**
+ * Build a resolver from a source map. Supports plain maps and indexed maps
+ * with `sections`; source paths are prefixed with `sourceRoot` when present.
+ */
+export function decodeSourceMap(map: SourceMapV3): SourceMapResolver {
+  if (map.sections && map.sections.length > 0) {
+    const flatSources: string[] = [];
+    const roots: Array<string | null> = [];
+    const sections = map.sections
+      .filter((s) => s.map && typeof s.map.mappings === 'string')
+      .map((s) => {
+        const m = s.map!;
+        const base = flatSources.length;
+        for (const src of m.sources) flatSources.push(src);
+        roots.push(...m.sources.map(() => m.sourceRoot ?? null));
+        return {
+          offsetLine: s.offset.line,
+          offsetCol: s.offset.column,
+          decoded: decodeMappings(m.mappings),
+          base,
+        };
+      });
+    return {
+      resolve(genLine, genCol) {
+        let best: (typeof sections)[number] | null = null;
+        for (const s of sections) {
+          if (s.offsetLine < genLine || (s.offsetLine === genLine && s.offsetCol <= genCol)) {
+            best = s;
+          } else {
+            break; // sections are ordered
+          }
+        }
+        if (!best) return null;
+        const relLine = genLine - best.offsetLine;
+        const relCol = relLine === 0 ? genCol - best.offsetCol : genCol;
+        const pos = originalPositionFor(best.decoded, relLine, relCol);
+        if (!pos) return null;
+        return { sourceIndex: best.base + pos.sourceIndex, line: pos.line, column: pos.column };
+      },
+      sourcePath(sourceIndex) {
+        const raw = flatSources[sourceIndex] ?? '';
+        const root = roots[sourceIndex] ?? null;
+        return root ? joinSourcePath(root, raw) : raw;
+      },
+      sourceRoot: null, // per-section roots are applied per source
+    };
+  }
+  const decoded = decodeMappings(map.mappings);
+  return {
+    resolve(genLine, genCol) {
+      return originalPositionFor(decoded, genLine, genCol);
+    },
+    sourcePath(sourceIndex) {
+      const raw = map.sources[sourceIndex] ?? '';
+      return map.sourceRoot ? joinSourcePath(map.sourceRoot, raw) : raw;
+    },
+    sourceRoot: map.sourceRoot ?? null,
+  };
+}
+
+/** Join sourceRoot and a source path preserving ../ semantics. */
+export function joinSourcePath(root: string, source: string): string {
+  if (source.startsWith('/') || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(source)) return source;
+  const combined = `${root.replace(/\/+$/, '')}/${source}`;
+  // Collapse ../ segments textually.
+  const parts = combined.split('/');
+  const out: string[] = [];
+  for (const part of parts) {
+    if (part === '..') out.pop();
+    else if (part !== '.' && part !== '') out.push(part);
+  }
+  return out.join('/');
 }
 
 /** Extract the sourceMappingURL target (the `sourceMappingURL=` comment) from CSS text. */

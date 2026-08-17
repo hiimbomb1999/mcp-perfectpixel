@@ -4,7 +4,9 @@
  *
  *   1. CSS source maps — the standard build-tool-agnostic mechanism. Works
  *      regardless of what templating language generated the HTML, because it
- *      operates at the compiled-CSS layer.
+ *      operates at the compiled-CSS layer. Each parsed rule carries its OWN
+ *      source-map position (resolved from its byte offset) — duplicate
+ *      selectors never share or misconsume positions.
  *   2. Gitignore-aware text search for the rule's selector (a ripgrep-style
  *      fallback; matches in gitignored paths are deprioritized as build output).
  *   3. If neither resolves, return the DOM/computed-style evidence as-is with
@@ -14,7 +16,9 @@
  * blocks it for external stylesheets on file:// pages (and cross-origin
  * generally). Instead we fetch each stylesheet's text ourselves, parse it with
  * css-tree (which also gives us the byte offsets source maps need), and match
- * selectors against the region's element via `element.matches()`.
+ * selectors against each region's element via `element.matches()` — only
+ * candidate selectors (bucketed by the element's tag/class/id keys), so huge
+ * Tailwind stylesheets don't turn into regions × selectors work.
  *
  * The caller (Claude Code, Cursor, ...) reads the repo and maps the returned
  * file/line hints to its own conventions.
@@ -28,20 +32,32 @@ import type {
   Confidence,
   DiffRegion,
   RegionSource,
+  RgbaImage,
   RuleEvidence,
   SourceLocation,
 } from './types.js';
 import {
-  decodeMappings,
+  decodeSourceMap,
   extractSourceMappingUrl,
-  mapOffset,
+  offsetToLineCol,
   parseSourceMap,
-  type Segment,
   type SourceMapV3,
+  type SourceMapResolver,
 } from './sourcemap.js';
 import { searchSelectors, type TextMatch } from './search.js';
-import { buildPatches, findDesignTokens } from './patches.js';
-import type { RgbaImage } from './types.js';
+import { buildPatches, findDesignTokens, type PatchRuleInput } from './patches.js';
+import {
+  compareSpecificity,
+  elementKeys,
+  selectorKeyOf,
+  specificityOf,
+  type Specificity,
+} from './css.js';
+
+/** Cap on candidate selectors matched per sample point (huge stylesheets). */
+const MAX_CANDIDATES_PER_POINT = 300;
+/** Cap on selectors searched in the repo per trace call. */
+const MAX_SEARCH_SELECTORS = 100;
 
 /** Visually relevant properties snapshotted on the region's element. */
 const VISUAL_PROPS: readonly string[] = [
@@ -99,6 +115,8 @@ const VISUAL_PROPS: readonly string[] = [
   'gap',
 ] as const;
 
+type Applies = 'yes' | 'no' | 'unknown';
+
 interface Point {
   x: number;
   y: number;
@@ -109,6 +127,7 @@ interface CollectedElement {
   id: string | null;
   classes: string[];
   computed: Record<string, string>;
+  rect: { x: number; y: number; width: number; height: number };
 }
 
 interface SheetInfo {
@@ -120,19 +139,32 @@ interface SheetInfo {
 
 interface ParsedRule {
   selector: string;
+  /** Bucket keys (tag, .class, #id of the last compound). */
+  keyStrings: string[];
+  specificity: Specificity;
   /** Byte offset of the rule's start in the generated stylesheet text. */
   offset: number;
-  /** Media/container/supports condition chain, e.g. "(max-width: 600px)". */
-  mediaChain: string | null;
+  media: string | null;
+  supports: string | null;
+  container: string | null;
+  /** Properties declared with !important. */
+  important: Set<string>;
   properties: string[];
   declared: Record<string, string>;
+  /**
+   * Original source location resolved from THIS rule's own offset at load
+   * time — duplicate selectors never share positions (no global counter).
+   */
+  sourceMapSource: SourceLocation | null;
+  sheetId: number;
+  /** Position in the sheet, for cascade order tie-breaking. */
+  index: number;
 }
 
 interface LoadedSheet {
   text: string;
   baseUrl: string | null;
-  map: SourceMapV3 | null;
-  segments: Map<number, Segment[]> | null;
+  resolver: SourceMapResolver | null;
   rules: ParsedRule[];
 }
 
@@ -142,11 +174,11 @@ export interface TraceOptions {
   design: RgbaImage;
 }
 
-/**
- * Runs inside the page (phase 1): finds the element at each region center and
- * snapshots its computed style. Rule matching happens in phase 3 via
- * `element.matches()` — CSSOM rule access is blocked for external stylesheets.
- */
+export interface TraceWarnings {
+  warnings: string[];
+}
+
+/** Runs inside the page: element info + computed style at each sample point. */
 const collectElementsScript = (arg: { points: Point[]; visualProps: readonly string[] }) => {
   const { points, visualProps } = arg;
   const sheets = Array.from(document.styleSheets);
@@ -162,34 +194,50 @@ const collectElementsScript = (arg: { points: Point[]; visualProps: readonly str
     if (!el || el.nodeType !== 1 || el === document.documentElement || el === document.body) {
       return null;
     }
-    const cs = getComputedStyle(el as Element);
+    const element = el as Element;
+    const cs = getComputedStyle(element);
     const computed: Record<string, string> = {};
     for (const p of visualProps) computed[p] = cs.getPropertyValue(p);
+    const rect = element.getBoundingClientRect();
     return {
-      tag: (el as Element).tagName.toLowerCase(),
-      id: (el as Element).id || null,
-      classes: Array.from((el as Element).classList),
+      tag: element.tagName.toLowerCase(),
+      id: element.id || null,
+      classes: Array.from(element.classList),
       computed,
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
     };
   });
   return { elements, sheets: sheetInfo };
 };
 
-/**
- * Runs inside the page (phase 3): for each region center, which selectors
- * match the element, and whether each media chain currently applies.
- */
-const matchScript = (arg: { points: Point[]; selectors: string[]; mediaChains: string[] }) => {
-  const { points, selectors, mediaChains } = arg;
-  const chainMatches: Record<string, boolean> = {};
-  for (const chain of mediaChains) {
+/** Runs inside the page: match candidate selectors + evaluate conditions. */
+const matchScript = (arg: {
+  points: Array<{ x: number; y: number; selectors: string[] }>;
+  media: string[];
+  supports: string[];
+}) => {
+  const { points, media, supports } = arg;
+  const mediaResult: Record<string, Applies> = {};
+  for (const c of media) {
     try {
-      chainMatches[chain] = window.matchMedia(chain).matches;
+      mediaResult[c] = window.matchMedia(c).matches ? 'yes' : 'no';
     } catch {
-      chainMatches[chain] = true;
+      mediaResult[c] = 'unknown';
     }
   }
-  const perPoint = points.map(({ x, y }) => {
+  const supportsResult: Record<string, Applies> = {};
+  for (const c of supports) {
+    try {
+      supportsResult[c] = (CSS as { supports?: (cond: string) => boolean }).supports
+        ? CSS.supports(c)
+          ? 'yes'
+          : 'no'
+        : 'unknown';
+    } catch {
+      supportsResult[c] = 'unknown';
+    }
+  }
+  const perPoint = points.map(({ x, y, selectors }) => {
     const el = document.elementFromPoint(x, y);
     if (!el || el.nodeType !== 1) return null;
     const selMatches: Record<string, boolean> = {};
@@ -202,30 +250,34 @@ const matchScript = (arg: { points: Point[]; selectors: string[]; mediaChains: s
     }
     return selMatches;
   });
-  return { perPoint, chainMatches };
+  return { perPoint, mediaResult, supportsResult };
 };
 
 /**
  * Attach `source` (element evidence + per-rule source locations + confidence)
- * to each region. Best-effort — failures degrade to DOM evidence only.
+ * to each region, plus minimal patch suggestions. Best-effort — failures are
+ * reported through `warnings` instead of being swallowed.
  */
 export async function traceRegions(
   page: Page,
   regions: DiffRegion[],
   options: TraceOptions,
-): Promise<DiffRegion[]> {
-  if (regions.length === 0) return regions;
+): Promise<{ regions: DiffRegion[]; warnings: string[] }> {
+  const warnings: string[] = [];
+  if (regions.length === 0) return { regions, warnings };
   const { repoRoot } = options;
-  const points = regions.map((r) => ({
-    x: Math.round(r.x + r.width / 2),
-    y: Math.round(r.y + r.height / 2),
-  }));
+
+  // Sample several points per region (center + quarter points) so the element
+  // is found even when the center sits on a transparent/empty spot.
+  const pointsPerRegion = regions.map(regionSamplePoints);
+  const points = pointsPerRegion.flat();
 
   const phase1 = await page.evaluate(collectElementsScript, { points, visualProps: VISUAL_PROPS });
-  const elements = phase1.elements as Array<CollectedElement | null>;
+  const perPointElements = phase1.elements as Array<CollectedElement | null>;
   const sheetsInfo = phase1.sheets as SheetInfo[];
 
-  // Load each stylesheet's text, source map, and parsed rules.
+  // Load each stylesheet's text, source map, and parsed rules. Each rule's
+  // source-map position is resolved HERE from its own offset.
   const loaded = new Map<number, LoadedSheet>();
   for (const info of sheetsInfo) {
     if (info.skipped) continue;
@@ -233,75 +285,249 @@ export async function traceRegions(
     if (!sheet) continue;
     const mapUrl = extractSourceMappingUrl(sheet.text);
     const map = mapUrl ? await loadMap(mapUrl, sheet.baseUrl) : null;
-    const segments = map ? decodeMappings(map.mappings) : null;
-    loaded.set(info.id, { ...sheet, map, segments, rules: parseRules(sheet.text) });
+    const resolver = map ? decodeSourceMap(map) : null;
+    const rules = parseRules(sheet.text, info.id);
+    for (const rule of rules) {
+      rule.sourceMapSource = resolver
+        ? resolveRuleSource(rule, resolver, sheet.text, sheet.baseUrl, repoRoot)
+        : null;
+    }
+    loaded.set(info.id, { ...sheet, resolver, rules });
   }
 
-  // Phase 3: match selectors + evaluate media chains in the page.
-  const allRules = [...loaded.values()].flatMap((s) => s.rules);
-  const selectors = [...new Set(allRules.map((r) => r.selector))];
-  const mediaChains = [
-    ...new Set(allRules.map((r) => r.mediaChain).filter((c): c is string => !!c)),
-  ];
-  const phase3 = await page.evaluate(matchScript, { points, selectors, mediaChains });
+  // Bucket selectors by element keys (tag / .class / #id of last compound).
+  const bucket = new Map<string, string[]>();
+  const selectorList: string[] = [];
+  for (const sheet of loaded.values()) {
+    for (const rule of sheet.rules) {
+      if (!selectorList.includes(rule.selector)) selectorList.push(rule.selector);
+      for (const key of rule.keyStrings) {
+        const list = bucket.get(key) ?? [];
+        if (!list.includes(rule.selector)) list.push(rule.selector);
+        bucket.set(key, list);
+      }
+    }
+  }
 
-  // Text-search fallback: selectors of rules that actually matched, one repo walk.
+  // Candidate selectors per point — only selectors whose last compound could
+  // match the element (avoid regions × all-selectors for huge stylesheets).
+  const candidatePoints = points.map((p, i) => {
+    const el = perPointElements[i];
+    if (!el) return { ...p, selectors: [] };
+    const keys = elementKeys(el.tag, el.classes, el.id);
+    const seen = new Set<string>();
+    const selectors: string[] = [];
+    for (const key of keys) {
+      for (const sel of bucket.get(key) ?? []) {
+        if (!seen.has(sel)) {
+          seen.add(sel);
+          selectors.push(sel);
+          if (selectors.length >= MAX_CANDIDATES_PER_POINT) break;
+        }
+      }
+      if (selectors.length >= MAX_CANDIDATES_PER_POINT) break;
+    }
+    return { ...p, selectors };
+  });
+
+  // Phase 3: match candidates + evaluate @media / @supports conditions.
+  const media = [
+    ...new Set(
+      selectorList.map((s) => ruleForSelector(loaded, s)?.media).filter((c): c is string => !!c),
+    ),
+  ];
+  const supports = [
+    ...new Set(
+      selectorList.map((s) => ruleForSelector(loaded, s)?.supports).filter((c): c is string => !!c),
+    ),
+  ];
+  const phase3 = await page.evaluate(matchScript, { points: candidatePoints, media, supports });
+  const mediaResult = phase3.mediaResult as Record<string, Applies>;
+  const supportsResult = phase3.supportsResult as Record<string, Applies>;
+  const perPointMatches = phase3.perPoint as Array<Record<string, boolean> | null>;
+
+  // Text-search fallback: selectors that actually matched, one repo walk.
   const matchedSelectors = new Set<string>();
-  for (let i = 0; i < elements.length; i++) {
-    const el = elements[i];
-    const selMatches = phase3.perPoint[i];
-    if (!el || !selMatches) continue;
-    for (const sel of selectors) {
+  for (const selMatches of perPointMatches) {
+    if (!selMatches) continue;
+    for (const sel of selectorList) {
       if (selMatches[sel]) matchedSelectors.add(sel);
     }
   }
+  const searchSelectorsToRun = [...matchedSelectors].slice(0, MAX_SEARCH_SELECTORS);
+  if ([...matchedSelectors].length > MAX_SEARCH_SELECTORS) {
+    warnings.push(
+      `search truncated: ${matchedSelectors.size} matched selectors, searching the first ${MAX_SEARCH_SELECTORS}`,
+    );
+  }
   const searchMatches =
-    matchedSelectors.size > 0
-      ? await searchSelectors(repoRoot, [...matchedSelectors])
+    searchSelectorsToRun.length > 0
+      ? await searchSelectors(repoRoot, searchSelectorsToRun)
       : new Map<string, TextMatch[]>();
-
-  // Per-(sheet, selector) counters so duplicate selectors map in order.
-  const consumed = new Map<string, number>();
-  const takeOffset = (sheetId: number, selector: string): number | null => {
-    const sheet = loaded.get(sheetId);
-    if (!sheet) return null;
-    const offsets = sheet.rules.filter((r) => r.selector === selector).map((r) => r.offset);
-    if (offsets.length === 0) return null;
-    const key = `${sheetId}\u0000${selector}`;
-    const idx = consumed.get(key) ?? 0;
-    consumed.set(key, idx + 1);
-    return offsets[Math.min(idx, offsets.length - 1)] ?? null;
-  };
 
   // Design tokens for patch suggestions (one repo walk).
   const tokens = await findDesignTokens(repoRoot);
 
-  return regions.map((region, i) => {
-    const el = elements[i];
-    const selMatches = phase3.perPoint[i];
-    const chainMatches = phase3.chainMatches as Record<string, boolean>;
-    if (!el || !selMatches) return { ...region, source: null };
+  const out: DiffRegion[] = [];
+  let pointCursor = 0;
+  for (let i = 0; i < regions.length; i++) {
+    const region = regions[i]!;
+    const regionPoints = pointsPerRegion[i]!;
+    const pointIndices = regionPoints.map((_, j) => pointCursor + j);
+    pointCursor += regionPoints.length;
+
+    const picked = pickElement(
+      region,
+      pointIndices.map((idx) => perPointElements[idx] ?? null),
+    );
+    if (!picked) {
+      out.push({ ...region, source: null });
+      warnings.push(`region ${region.id}: no element found at any sample point`);
+      continue;
+    }
+    // Use the matches of the point that produced the picked element.
+    const bestPointIdx = pointIndices[picked.pointIndex]!;
+    const selMatches = perPointMatches[bestPointIdx] ?? {};
+
     const source = buildRegionSource(
-      el,
+      picked.element,
       loaded,
       selMatches,
-      chainMatches,
-      takeOffset,
+      mediaResult,
+      supportsResult,
       searchMatches,
       repoRoot,
     );
-    // Goal 3: minimal patch suggestions, preferring project tokens.
-    source.patches = buildPatches(options.design, region, source.rules, tokens);
-    return { ...region, source };
-  });
+    const matchedRules = collectMatchedRules(
+      picked.element,
+      loaded,
+      selMatches,
+      mediaResult,
+      supportsResult,
+    );
+    const patchInputs: PatchRuleInput[] = matchedRules.map(({ sheetId, index, rule }) => {
+      const fb = searchFallback(rule.selector, searchMatches);
+      return {
+        selector: rule.selector,
+        specificity: rule.specificity,
+        sheetId,
+        index,
+        important: rule.important,
+        properties: rule.properties,
+        declared: rule.declared,
+        source: rule.sourceMapSource ?? fb.source,
+        confidence: rule.sourceMapSource ? 'high' : fb.confidence,
+      };
+    });
+    source.patches = buildPatches(
+      options.design,
+      region,
+      patchInputs,
+      picked.element.computed,
+      tokens,
+    );
+    out.push({ ...region, source });
+  }
+  return { regions: out, warnings };
+}
+
+/** Sample points for a region: center + quarter points, clamped to the bbox. */
+function regionSamplePoints(r: DiffRegion): Point[] {
+  const raw = [
+    { x: r.x + r.width / 2, y: r.y + r.height / 2 },
+    { x: r.x + r.width * 0.2, y: r.y + r.height * 0.2 },
+    { x: r.x + r.width * 0.8, y: r.y + r.height * 0.8 },
+    { x: r.x + r.width * 0.2, y: r.y + r.height * 0.8 },
+    { x: r.x + r.width * 0.8, y: r.y + r.height * 0.2 },
+  ];
+  const seen = new Set<string>();
+  const pts: Point[] = [];
+  for (const p of raw) {
+    const x = Math.round(Math.max(r.x, Math.min(r.x + r.width - 1, p.x)));
+    const y = Math.round(Math.max(r.y, Math.min(r.y + r.height - 1, p.y)));
+    const k = `${x},${y}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    pts.push({ x, y });
+  }
+  return pts;
+}
+
+/** Choose the element whose rect overlaps the region the most. */
+function pickElement(
+  region: DiffRegion,
+  candidates: Array<CollectedElement | null>,
+): { element: CollectedElement; pointIndex: number } | null {
+  let best: CollectedElement | null = null;
+  let bestPoint = -1;
+  let bestOverlap = -1;
+  let bestArea = Infinity;
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    if (!c) continue;
+    const overlap = intersectionArea(region, c.rect);
+    const area = c.rect.width * c.rect.height;
+    if (overlap > bestOverlap || (overlap === bestOverlap && area < bestArea)) {
+      best = c;
+      bestPoint = i;
+      bestOverlap = overlap;
+      bestArea = area;
+    }
+  }
+  if (!best || bestPoint < 0) return null;
+  return { element: best, pointIndex: bestPoint };
+}
+
+function intersectionArea(
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+): number {
+  const w = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+  const h = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+  return w > 0 && h > 0 ? w * h : 0;
+}
+
+function appliesFor(
+  rule: ParsedRule,
+  mediaResult: Record<string, Applies>,
+  supportsResult: Record<string, Applies>,
+): Applies {
+  // Container queries can't be evaluated from the CSSOM side — report unknown.
+  if (rule.container !== null) return 'unknown';
+  if (rule.media !== null && mediaResult[rule.media] === 'no') return 'no';
+  if (rule.supports !== null && supportsResult[rule.supports] === 'no') return 'no';
+  if (rule.media !== null && mediaResult[rule.media] === 'unknown') return 'unknown';
+  if (rule.supports !== null && supportsResult[rule.supports] === 'unknown') return 'unknown';
+  return 'yes';
+}
+
+/** Rules matching the element with conditions that currently apply. */
+function collectMatchedRules(
+  el: CollectedElement,
+  loaded: Map<number, LoadedSheet>,
+  selMatches: Record<string, boolean>,
+  mediaResult: Record<string, Applies>,
+  supportsResult: Record<string, Applies>,
+): Array<{ sheetId: number; index: number; rule: ParsedRule }> {
+  const matched: Array<{ sheetId: number; index: number; rule: ParsedRule }> = [];
+  for (const [sheetId, sheet] of loaded) {
+    for (let index = 0; index < sheet.rules.length; index++) {
+      const rule = sheet.rules[index]!;
+      if (selMatches[rule.selector] !== true) continue;
+      if (appliesFor(rule, mediaResult, supportsResult) === 'no') continue;
+      matched.push({ sheetId, index, rule });
+    }
+  }
+  void el;
+  return matched;
 }
 
 function buildRegionSource(
   el: CollectedElement,
   loaded: Map<number, LoadedSheet>,
   selMatches: Record<string, boolean>,
-  chainMatches: Record<string, boolean>,
-  takeOffset: (sheetId: number, selector: string) => number | null,
+  mediaResult: Record<string, Applies>,
+  supportsResult: Record<string, Applies>,
   searchMatches: Map<string, TextMatch[]>,
   repoRoot: string,
 ): RegionSource {
@@ -311,61 +537,25 @@ function buildRegionSource(
       ? `${el.tag}${el.classes.map((c) => `.${c}`).join('')}`
       : el.tag;
 
-  const matched: Array<{ sheetId: number; rule: ParsedRule }> = [];
-  for (const [sheetId, sheet] of loaded) {
-    for (const rule of sheet.rules) {
-      if (
-        selMatches[rule.selector] === true &&
-        (rule.mediaChain === null || chainMatches[rule.mediaChain] === true)
-      ) {
-        matched.push({ sheetId, rule });
-      }
-    }
-  }
+  const matched = collectMatchedRules(el, loaded, selMatches, mediaResult, supportsResult);
 
-  const rules: RuleEvidence[] = matched.map(({ sheetId, rule }) => {
-    let source: SourceLocation | null = null;
-    let confidence: Confidence = 'low';
+  const rules: RuleEvidence[] = matched.map(({ rule }) => {
+    let source: SourceLocation | null = rule.sourceMapSource;
+    let confidence: Confidence = source ? 'high' : 'low';
 
-    // 1) CSS source map.
-    const sheet = loaded.get(sheetId);
-    if (sheet?.map && sheet.segments) {
-      const offset = takeOffset(sheetId, rule.selector);
-      if (offset !== null) {
-        const pos = mapOffset(sheet.segments, sheet.text, offset);
-        const rawFile = pos ? sheet.map.sources[pos.sourceIndex] : undefined;
-        if (rawFile) {
-          source = {
-            file: normalizeSourceFile(rawFile, sheet.baseUrl, repoRoot),
-            line: pos!.line + 1,
-            column: pos!.column + 1,
-            via: 'source-map',
-            gitignored: false,
-          };
-          confidence = 'high';
-        }
-      }
-    }
-
-    // 2) gitignore-aware text search fallback.
+    // Text-search fallback.
     if (!source) {
-      const best = searchMatches.get(rule.selector)?.[0];
-      if (best) {
-        source = {
-          file: best.file,
-          line: best.line,
-          column: best.column,
-          via: 'text-search',
-          gitignored: best.gitignored,
-        };
-        confidence = best.gitignored ? 'low' : 'medium';
-      }
+      const fb = searchFallback(rule.selector, searchMatches);
+      source = fb.source;
+      confidence = fb.confidence;
     }
 
     return {
       selector: rule.selector,
-      media: rule.mediaChain,
-      applies: rule.mediaChain === null || chainMatches[rule.mediaChain] === true,
+      media: rule.media,
+      supports: rule.supports,
+      container: rule.container,
+      applies: appliesFor(rule, mediaResult, supportsResult),
       properties: rule.properties,
       declared: rule.declared,
       source,
@@ -393,6 +583,47 @@ function buildRegionSource(
   };
 }
 
+/** Best text-search match for a selector → source + confidence. */
+function searchFallback(
+  selector: string,
+  searchMatches: Map<string, TextMatch[]>,
+): { source: SourceLocation | null; confidence: Confidence } {
+  const best = searchMatches.get(selector)?.[0];
+  if (!best) return { source: null, confidence: 'low' };
+  return {
+    source: {
+      file: best.file,
+      line: best.line,
+      column: best.column,
+      via: 'text-search',
+      gitignored: best.gitignored,
+    },
+    confidence: best.gitignored ? 'low' : 'medium',
+  };
+}
+
+/** Resolve a rule's source position from ITS OWN offset (no shared counter). */
+function resolveRuleSource(
+  rule: ParsedRule,
+  resolver: SourceMapResolver,
+  cssText: string,
+  baseUrl: string | null,
+  repoRoot: string,
+): SourceLocation | null {
+  const { line, column } = offsetToLineCol(cssText, rule.offset);
+  const pos = resolver.resolve(line, column);
+  if (!pos) return null;
+  const rawFile = resolver.sourcePath(pos.sourceIndex);
+  if (!rawFile) return null;
+  return {
+    file: normalizeSourceFile(rawFile, baseUrl, repoRoot),
+    line: pos.line + 1,
+    column: pos.column + 1,
+    via: 'source-map',
+    gitignored: false,
+  };
+}
+
 /** Resolve a map-relative source path to repo-relative when possible. */
 function normalizeSourceFile(raw: string, baseUrl: string | null, repoRoot: string): string {
   if (baseUrl?.startsWith('file:')) {
@@ -409,6 +640,14 @@ function normalizeSourceFile(raw: string, baseUrl: string | null, repoRoot: stri
   return raw;
 }
 
+function ruleForSelector(loaded: Map<number, LoadedSheet>, selector: string): ParsedRule | null {
+  for (const sheet of loaded.values()) {
+    const rule = sheet.rules.find((r) => r.selector === selector);
+    if (rule) return rule;
+  }
+  return null;
+}
+
 async function loadSheet(
   info: SheetInfo,
 ): Promise<{ text: string; baseUrl: string | null } | null> {
@@ -421,7 +660,7 @@ async function loadSheet(
         const text = await readFile(fileURLToPath(info.href), 'utf8');
         return { text, baseUrl: info.href };
       }
-      const res = await fetch(info.href);
+      const res = await fetch(info.href, { signal: AbortSignal.timeout(15_000) });
       if (!res.ok) return null;
       return { text: await res.text(), baseUrl: info.href };
     } catch {
@@ -447,7 +686,7 @@ async function loadMap(mapUrl: string, baseUrl: string | null): Promise<SourceMa
       const data = await readFile(fileURLToPath(abs), 'utf8');
       return parseSourceMap(data);
     }
-    const res = await fetch(abs);
+    const res = await fetch(abs, { signal: AbortSignal.timeout(15_000) });
     if (!res.ok) return null;
     return parseSourceMap(await res.text());
   } catch {
@@ -461,10 +700,10 @@ function isUniversalSelector(selector: string): boolean {
 }
 
 /**
- * Parse a stylesheet's text: every rule with its byte offset (for source-map
- * mapping), media condition chain, and visually relevant declarations.
+ * Parse a stylesheet's text: every rule with its byte offset, cascade
+ * metadata, conditional at-rule chains, and visually relevant declarations.
  */
-function parseRules(cssText: string): ParsedRule[] {
+function parseRules(cssText: string, sheetId: number): ParsedRule[] {
   let ast;
   try {
     ast = csstree.parse(cssText, { positions: true });
@@ -472,21 +711,20 @@ function parseRules(cssText: string): ParsedRule[] {
     return [];
   }
   const out: ParsedRule[] = [];
-  const atRuleStack: string[] = [];
-  const mediaChain = (): string | null => {
-    const parts = atRuleStack.filter((c) => c !== '');
+  const mediaStack: string[] = [];
+  const supportsStack: string[] = [];
+  const containerStack: string[] = [];
+  const chain = (stack: string[]): string | null => {
+    const parts = stack.filter((c) => c !== '');
     return parts.length > 0 ? parts.join(' and ') : null;
   };
   csstree.walk(ast, {
     enter(node: csstree.CssNode) {
       if (node.type === 'Atrule') {
-        const condition =
-          node.name === 'media' || node.name === 'supports' || node.name === 'container'
-            ? node.prelude
-              ? csstree.generate(node.prelude)
-              : ''
-            : '';
-        atRuleStack.push(condition);
+        const prelude = node.prelude ? csstree.generate(node.prelude) : '';
+        if (node.name === 'media') mediaStack.push(prelude);
+        else if (node.name === 'supports') supportsStack.push(prelude);
+        else if (node.name === 'container') containerStack.push(prelude);
       } else if (node.type === 'Rule') {
         const start = node.loc?.start.offset;
         if (start === undefined) return;
@@ -499,6 +737,7 @@ function parseRules(cssText: string): ParsedRule[] {
         if (isUniversalSelector(selector)) return;
         const properties: string[] = [];
         const declared: Record<string, string> = {};
+        const important = new Set<string>();
         if (node.block) {
           node.block.children.forEach((decl: csstree.CssNode) => {
             if (decl.type !== 'Declaration') return;
@@ -511,19 +750,38 @@ function parseRules(cssText: string): ParsedRule[] {
             }
             properties.push(decl.property);
             declared[decl.property] = value;
+            if (decl.important) important.add(decl.property);
           });
         }
+        const key = selectorKeyOf(selector);
+        const keyStrings = [
+          ...key.tags,
+          ...key.classes.map((c) => `.${c}`),
+          ...key.ids.map((i) => `#${i}`),
+        ];
         out.push({
           selector,
+          keyStrings,
+          specificity: specificityOf(selector),
           offset: start,
-          mediaChain: mediaChain(),
+          media: chain(mediaStack),
+          supports: chain(supportsStack),
+          container: chain(containerStack),
+          important,
           properties,
           declared,
+          sourceMapSource: null,
+          sheetId,
+          index: out.length,
         });
       }
     },
     leave(node: csstree.CssNode) {
-      if (node.type === 'Atrule') atRuleStack.pop();
+      if (node.type === 'Atrule') {
+        if (node.name === 'media') mediaStack.pop();
+        else if (node.name === 'supports') supportsStack.pop();
+        else if (node.name === 'container') containerStack.pop();
+      }
     },
   });
   return out;
