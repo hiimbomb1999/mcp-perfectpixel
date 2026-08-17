@@ -137,6 +137,7 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
     // minimal patch suggestions. Best-effort — failures never fail the capture,
     // but they ARE reported through result.trace instead of being swallowed.
     let traceStatus: 'skipped' | 'ok' | 'partial' | 'failed' = 'skipped';
+    let responsive: { mediaQueries: number; containerQueries: number } | undefined;
     if (trace && regions.length > 0) {
       try {
         const traced = await traceRegions(page, regions, {
@@ -148,6 +149,7 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
         regions = traced.regions;
         traceWarnings.push(...traced.warnings);
         traceStatus = traceWarnings.length > 0 ? 'partial' : 'ok';
+        responsive = traced.responsive;
       } catch (error) {
         traceStatus = 'failed';
         traceWarnings.push(
@@ -188,6 +190,7 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
         animationsDisabled: true,
         fontsWaited: true,
         durationMs: Math.round(durationMs),
+        ...(responsive ? { responsive } : {}),
       },
       artifacts: {
         screenshotPath,

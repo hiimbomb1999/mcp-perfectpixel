@@ -305,6 +305,33 @@ When a patch has no anchor (e.g. the culprit color is inherited from an
 ancestor, or set by an inline style), the result explains it in `notes[]`
 instead of guessing.
 
+## Responsive design (avoid hardcoded width/height)
+
+A design **image is a single-viewport raster** — it cannot encode breakpoints,
+auto-layout or fluid behavior. Copying pixel dimensions out of it into
+`width: 120px; height: 36px` is the fastest way to break a real theme on other
+viewports. `mcp-perfectpixel` is designed so this doesn't happen by accident:
+
+- **It never suggests width/height patches** — patches are color-only
+  (`background-color`, `color`, borders, outline). Layout is never "fixed" by
+  the tool.
+- **`capture.responsive` reports the page's own breakpoints** — the distinct
+  `@media` / `@container` condition counts across all stylesheets. Non-zero
+  means the page is responsive, and any px dimensions in the output are
+  viewport-specific.
+- **`notes[]` warns when it matters**: if an element renders at fixed px
+  dimensions while the page uses media/container queries, or when a diff is
+  geometry-only (no color change), the region note says so and tells the agent
+  to prefer fluid sizing (`min/max-width`, flex/grid, spacing tokens) and to
+  re-run the capture at other viewports to verify.
+- **The values are still accurate** — `width`/`height` in the computed style
+  are the real rendered values at the capture viewport; they are evidence, not
+  instructions.
+
+For responsive _intent_, pair this tool with **Figma MCP's structured data**
+(auto-layout, constraints, variables) — the raster verifies the pixels, the
+structured data informs the layout strategy.
+
 ## Designs from Figma
 
 `mcp-perfectpixel` works from **flat images only** — the [official Figma Dev

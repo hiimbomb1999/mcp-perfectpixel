@@ -105,6 +105,7 @@ const outputSchema = {
     animationsDisabled: z.boolean(),
     fontsWaited: z.boolean(),
     durationMs: z.number(),
+    responsive: z.object({ mediaQueries: z.number(), containerQueries: z.number() }).optional(),
   }),
   artifacts: z.object({
     screenshotPath: z.string(),
@@ -137,7 +138,11 @@ server.registerTool(
       'minimal patch suggestions (file, line, property, current -> suggested) derived ' +
       'from the design image pixels, preferring design tokens the project already ' +
       'defines (CSS custom properties, Tailwind config, style-dictionary) over new ' +
-      'hardcoded values — never full component rewrites.',
+      'hardcoded values — never full component rewrites. Responsive caution: the design ' +
+      'image is a single-viewport raster, so pixel width/height in the output is only ' +
+      'valid at the capture viewport — treat it as evidence, never as fixed values to ' +
+      'hardcode; region notes flag fixed dimensions when the page itself is responsive ' +
+      '(media/container queries), and capture.responsive reports those counts.',
     inputSchema: {
       url: urlSchema.describe('Live URL to screenshot — http(s) or file URL.'),
       designImagePath: z

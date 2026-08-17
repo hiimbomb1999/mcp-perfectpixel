@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { FileTextCache, trimComputedStyle } from '@mcp-perfectpixel/core';
+import { FileTextCache, responsiveNotes, trimComputedStyle } from '@mcp-perfectpixel/core';
 
 describe('trimComputedStyle', () => {
   const FULL = {
@@ -53,6 +53,34 @@ describe('trimComputedStyle', () => {
       Object.keys(FULL).length,
     );
     expect(trimComputedStyle(FULL, PARENT, 'none')).toEqual({});
+  });
+});
+
+describe('responsiveNotes (avoid hardcoding width/height)', () => {
+  const FIXED = { computed: { width: '120px', height: '36px' } };
+  const FLUID = { computed: { width: 'auto', height: 'auto' } };
+
+  it('warns against hardcoding dims when the page is responsive and dims are fixed', () => {
+    const notes = responsiveNotes(800, FIXED, { mediaQueries: 3, containerQueries: 1 }, true);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/do NOT hardcode width\/height/);
+    expect(notes[0]).toContain('120px×36px');
+    expect(notes[0]).toContain('3 @media');
+  });
+
+  it('warns on geometry-only diffs (no color patch) with fixed dims', () => {
+    const notes = responsiveNotes(800, FIXED, { mediaQueries: 0, containerQueries: 0 }, false);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/layout\/spacing/);
+    expect(notes[0]).toMatch(/fluid layout/);
+  });
+
+  it('stays silent for fluid elements with a patch and no breakpoints', () => {
+    expect(responsiveNotes(800, FLUID, { mediaQueries: 0, containerQueries: 0 }, true)).toEqual([]);
+  });
+
+  it('stays silent for fluid elements even on a responsive page', () => {
+    expect(responsiveNotes(800, FLUID, { mediaQueries: 4, containerQueries: 0 }, true)).toEqual([]);
   });
 });
 

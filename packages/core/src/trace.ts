@@ -280,9 +280,14 @@ export async function traceRegions(
   page: Page,
   regions: DiffRegion[],
   options: TraceOptions,
-): Promise<{ regions: DiffRegion[]; warnings: string[] }> {
+): Promise<{
+  regions: DiffRegion[];
+  warnings: string[];
+  responsive: { mediaQueries: number; containerQueries: number };
+}> {
   const warnings: string[] = [];
-  if (regions.length === 0) return { regions, warnings };
+  const responsive = { mediaQueries: 0, containerQueries: 0 };
+  if (regions.length === 0) return { regions, warnings, responsive };
   const { repoRoot, mode, computedStyle } = options;
 
   // Sample several points per region (center + quarter points) so the element
@@ -311,6 +316,19 @@ export async function traceRegions(
         : null;
     }
     loaded.set(info.id, { ...sheet, resolver, rules });
+  }
+
+  // How responsive is the page? Distinct @media / @container conditions across
+  // all stylesheets — used to warn against hardcoding pixel dimensions.
+  for (const sheet of loaded.values()) {
+    const media = new Set<string>();
+    const container = new Set<string>();
+    for (const rule of sheet.rules) {
+      if (rule.media) media.add(rule.media);
+      if (rule.container) container.add(rule.container);
+    }
+    responsive.mediaQueries += media.size;
+    responsive.containerQueries += container.size;
   }
 
   // Bucket selectors by element keys (tag / .class / #id of last compound).
@@ -471,10 +489,21 @@ export async function traceRegions(
         }
       }
     }
+    // Responsive guidance: the design image is a single-viewport raster, so
+    // pixel dimensions in this output must never be turned into hardcoded
+    // width/height — especially when the page itself is responsive.
+    notes.push(
+      ...responsiveNotes(
+        options.design.width,
+        picked.element,
+        responsive,
+        source.patches.length > 0,
+      ),
+    );
     source.notes = notes;
     out.push({ ...region, source });
   }
-  return { regions: out, warnings };
+  return { regions: out, warnings, responsive };
 }
 
 /** Sample points for a region: center + quarter points, clamped to the bbox. */
@@ -640,6 +669,45 @@ const ALWAYS_KEEP_COMPUTED = [
   'border-left-color',
   'outline-color',
 ];
+
+/**
+ * Guidance notes that keep agents from hardcoding pixel dimensions. The design
+ * image is a single-viewport raster — every px width/height in the output is
+ * only valid at the capture viewport. When the element renders at fixed px
+ * dimensions and the page itself is responsive (has @media/@container
+ * queries), or when the diff is geometry-only (no color patch), say so
+ * explicitly so the caller prefers fluid sizing instead.
+ */
+export function responsiveNotes(
+  viewportWidth: number,
+  element: { computed: Record<string, string> },
+  responsive: { mediaQueries: number; containerQueries: number },
+  hasPatch: boolean,
+): string[] {
+  const width = element.computed.width;
+  const height = element.computed.height;
+  const fixedDims =
+    width !== undefined && height !== undefined && width !== 'auto' && height !== 'auto';
+  const breakpoints = responsive.mediaQueries + responsive.containerQueries;
+
+  if (breakpoints > 0 && fixedDims) {
+    return [
+      `This element renders at ${width}×${height}px in the ${viewportWidth}px viewport. ` +
+        `The design image is a single breakpoint — do NOT hardcode width/height. ` +
+        `This page uses ${responsive.mediaQueries} @media and ${responsive.containerQueries} @container ` +
+        'condition(s); prefer fluid sizing (min/max-width, flex/grid, spacing tokens) and ' +
+        're-run capture_and_diff at other viewports to verify.',
+    ];
+  }
+  if (!hasPatch && fixedDims) {
+    return [
+      'No color change — this diff is layout/spacing. Pixel dimensions here are ' +
+        'viewport-specific (design image = one breakpoint); prefer fluid layout over fixed ' +
+        'width/height and verify at multiple breakpoints.',
+    ];
+  }
+  return [];
+}
 
 /**
  * Trim the computed-style snapshot per the requested mode. 'minimal' keeps the

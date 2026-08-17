@@ -221,6 +221,13 @@ export interface CaptureInfo {
   animationsDisabled: boolean;
   fontsWaited: boolean;
   durationMs: number;
+  /**
+   * How many distinct @media / @container queries the page's stylesheets use
+   * (only when tracing ran). Non-zero means the page is responsive — treat
+   * any pixel width/height in the output as viewport-specific, never as a
+   * fixed value to hardcode.
+   */
+  responsive?: { mediaQueries: number; containerQueries: number };
 }
 
 export interface DiffArtifacts {
