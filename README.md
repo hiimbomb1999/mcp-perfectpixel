@@ -1,65 +1,84 @@
 # mcp-perfectpixel
 
-**Codebase-grounded design-to-code diff server for the Model Context Protocol.**
+> **The missing verification layer for AI design-to-code workflows.**
 
-`mcp-perfectpixel` is an MCP server that screenshots a live URL and diffs it against
-a static design image (PNG/JPG), returning **grouped diff regions with severity
-scores** — not raw pixel noise. Capture is **deterministic** (animations disabled,
-fonts fully loaded, fixed locale/timezone), so re-runs are stable enough to reason
-about pixel-by-pixel.
+`mcp-perfectpixel` is an [MCP](https://modelcontextprotocol.io) server that
+screenshots a live URL and diffs it against a static design image (PNG/JPG),
+returning **grouped diff regions with severity scores** — not raw pixel noise —
+each traced to its DOM element, real source location, and a minimal patch
+suggestion. Capture is **deterministic** (animations disabled, fonts fully
+loaded, fixed locale/timezone), so re-runs are stable enough to reason about
+pixel-by-pixel.
 
-The server deliberately stops at supplying accurate, structured evidence: DOM-scale
-bounding boxes, color deltas, severity, and the artifacts themselves. Mapping those
-regions to real source files is left to the calling agent (Claude Code, Cursor,
-DeepSeek Agent), which already reads the full repo and understands its own
-conventions — this is what makes the tool work on any language or framework
-without per-framework parsers.
+It is a _verification_ tool, not a design tool: it does not read Figma files,
+does not generate code, and does not know what framework you use. It closes the
+loop the other MCP tools leave open — _"did the final result actually match the
+design?"_
 
-> **Status:** Goals 1–5 are implemented and tested: deterministic capture +
-> pixel diff with grouped severity-scored regions, tracing each region to its
-> DOM element + real source location (CSS source maps, then gitignore-aware
-> text search, with confidence scoring), minimal patch suggestions that prefer
-> the project's own design tokens, the structured-context boundary, and the
-> full OSS/release pipeline. The first npm publish happens when a `v0.1.0` tag
-> is pushed with the `NPM_TOKEN` secret configured — see [Roadmap](#roadmap).
+## Why this exists
+
+Shipping pixel-perfect themes for **BigCommerce, Shopify, WordPress and landing
+pages** usually goes like this: the build itself is fast, but the final
+**"does it match the design"** pass is a slow, manual, zoom-and-compare chore —
+and it is exactly the step AI coding agents get wrong (wrong spacing, off-by-one
+colors, missing tokens).
+
+`mcp-perfectpixel` automates that verification loop: screenshot the live URL,
+diff against the design image, get grouped regions + source locations + minimal
+patches, fix, and re-run until `similarity: 1.0`. The calling agent (Claude
+Code, Cursor, DeepSeek Agent, Codex) applies the fixes — the server supplies
+accurate, structured evidence and stops there.
+
+## Where it fits
+
+Three MCP servers, three moments of the design-to-code loop — they complement,
+not compete:
+
+|               | **Figma MCP**                                                                 | **Chrome DevTools MCP**                                                      | **mcp-perfectpixel**                                                                        |
+| ------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| **Gives you** | Structured design data — node tree, styles, variables, tokens, generated code | Live DOM / CSS / console / network debugging of the running page             | Pixel-level verification — diff of the final render against the design image                |
+| **Use it**    | **Before** writing code — _what should I build, what are the exact styles?_   | **During** development — _why is it behaving like this, fix runtime issues?_ | **After** implementing — _does the final result actually match the design, pixel by pixel?_ |
+| **Answers**   | What's in the design?                                                         | What's happening on the page?                                                | Did we nail the design?                                                                     |
+
+`mcp-perfectpixel` is deliberately **not** a Figma MCP competitor: it never
+touches Figma. It takes the flat image Figma MCP can hand it (or any PNG/JPG)
+and verifies the _rendered result_ — the step neither of the other two covers.
 
 ## Features
 
-- **Deterministic capture** — screenshots a URL in headless Chromium with
-  animations/transitions disabled, `prefers-reduced-motion` forced, all web fonts
-  awaited (`document.fonts.ready`), fixed `en-US` locale and UTC timezone, light
-  color scheme, `deviceScaleFactor: 1`.
-- **Grouped diff regions** — differing pixels are connected into clusters and
-  nearby clusters merged, so you get "the button is wrong", not 4,000 scattered
-  pixels. Each region carries a bounding box, pixel count, mean/max color delta,
-  and a composite **severity score** (`high` / `medium` / `low`).
-- **Region → source tracing** — every region is resolved to its DOM element
-  (tag/id/classes, computed style) and the CSS rules styling it, each with a
-  best-effort original source location and a **confidence score** (`high` /
-  `medium` / `low`) — see [Source tracing](#source-tracing).
-- **Overall similarity** — `1 - diffRatio` plus a `match` / `diff` status with a
-  configurable tolerance.
-- **Artifacts on disk** — the screenshot and a highlighted diff image (PNG) are
-  written to an output directory and their paths returned, so the calling agent
-  can inspect them directly.
-- **PNG and JPG designs** — the design image is decoded natively; if you pass an
-  explicit viewport that differs from the design's dimensions, the design is
-  resized (bilinear) to match.
+- **Deterministic capture** — headless Chromium with animations/transitions
+  disabled, `prefers-reduced-motion` forced, all web fonts awaited
+  (`document.fonts.ready`), fixed `en-US` locale + UTC timezone, light scheme,
+  `deviceScaleFactor: 1`. Two runs produce byte-identical screenshots.
+- **Grouped diff regions** — differing pixels are clustered and nearby clusters
+  merged, so you get _"the button is wrong"_, not 4,000 scattered pixels. Each
+  region carries a bounding box, pixel count, color deltas, and a severity
+  score (`high` / `medium` / `low`).
+- **Region → source tracing** — every region resolves to its DOM element and the
+  CSS rules styling it, each with a best-effort original
+  `file:line:column` (CSS source maps first, then gitignore-aware text search)
+  and a confidence score.
+- **Minimal patches** — the smallest single-property change
+  (`file, line, property, current → suggested`), preferring design tokens the
+  project already defines (`var(--color-success)`, not a hardcoded hex). Never
+  a component rewrite.
+- **Artifacts on disk** — screenshot + highlighted diff image (PNG) written to
+  an output dir and returned, so the agent can inspect them.
+- **Token-friendly output** — typed `structuredContent` (declared output
+  schema), trimmed computed style, rounded floats; ~37% smaller payloads.
+- **Works with any stack** — tracing operates at the compiled-CSS layer + text
+  search, so Liquid, Stencil, Twig, JSX, Blade, Razor or plain HTML all behave
+  identically. No per-framework parsers.
 
 ## Install & run
 
-Requires **Node.js ≥ 20** and a Chromium binary. The browser is **not**
-downloaded automatically — install it once with:
+Requires **Node.js ≥ 20** and a Chromium binary (install once):
 
 ```bash
 npx playwright install chromium
 ```
 
-(If it's missing, the server returns a clear error pointing at this command.)
-
-### Claude Desktop
-
-Add to `claude_desktop_config.json`:
+### Claude Desktop — `claude_desktop_config.json`
 
 ```json
 {
@@ -72,9 +91,7 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
-### Cursor
-
-Add to `.cursor/mcp.json`:
+### Cursor — `.cursor/mcp.json`
 
 ```json
 {
@@ -87,9 +104,7 @@ Add to `.cursor/mcp.json`:
 }
 ```
 
-### Codex CLI
-
-Add to `~/.codex/config.toml`:
+### Codex CLI — `~/.codex/config.toml`
 
 ```toml
 [mcp_servers.mcp-perfectpixel]
@@ -97,35 +112,25 @@ command = "/path/to/node"
 args = ["/path/to/mcp-perfectpixel/packages/server/dist/index.js"]
 ```
 
-(Running from source: `command` is the absolute path to `node`, `args` points at
-the built server entry. Restart Codex after editing. The server's `repoRoot`
-defaults to the Codex session's working directory — your project — so tracing
-and token lookup work against the code you're editing.)
+(Running from source: `command` is the absolute `node` path, `args` points at
+the built server entry. Restart Codex after editing. `repoRoot` defaults to the
+session's working directory — your project — so tracing and token lookup run
+against the code you're editing.)
 
-### Try it locally
+### Try it locally (no client needed)
 
 ```bash
 pnpm install
 pnpm --filter @mcp-perfectpixel/core exec playwright install chromium
 pnpm build
 
-# diff the repo's own fixture page against its design
-node examples/demo.mjs /tmp/design.png \
+# one command: renders the fixture design, diffs the fixture page, prints everything
+node examples/demo.mjs packages/server/test/fixtures/design.html \
   "file://$PWD/packages/server/test/fixtures/page.html"
 ```
 
-`examples/demo.mjs` renders a design PNG from the fixture and calls the engine
-directly (no MCP client needed) — see the script header for how to point it at
-your own design image and URL.
-
-### From source
-
-```bash
-pnpm install
-pnpm --filter @mcp-perfectpixel/core exec playwright install chromium
-pnpm build
-pnpm --filter mcp-perfectpixel start
-```
+`examples/demo.mjs` calls the engine directly with your own design image/URL:
+`node examples/demo.mjs <design.png|design.html> <url> [repoRoot]`.
 
 ## Tool reference
 
@@ -133,23 +138,23 @@ pnpm --filter mcp-perfectpixel start
 
 Screenshots `url`, diffs it against `designImagePath`, returns regions + artifacts.
 
-| Argument          | Type                            | Description                                                                                                                                                                                                          |
-| ----------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `url`             | `string` (required)             | Live URL to screenshot — `http(s)` or `file` URL.                                                                                                                                                                    |
-| `designImagePath` | `string` (required)             | Path to the static design image (`.png`, `.jpg`, `.jpeg`) **or an http(s) image URL** (e.g. a Figma export link).                                                                                                    |
-| `viewport`        | `{width, height}`               | CSS-pixel viewport. Defaults to the design image's dimensions.                                                                                                                                                       |
-| `outputDir`       | `string`                        | Where to write artifacts. Defaults to a fresh temp dir.                                                                                                                                                              |
-| `waitForSelector` | `string`                        | CSS selector to wait for before screenshotting.                                                                                                                                                                      |
-| `waitMs`          | `number`                        | Extra settle time after load, in ms.                                                                                                                                                                                 |
-| `diffThreshold`   | `number` (0–1)                  | pixelmatch sensitivity. Smaller = more sensitive. Default `0.1`.                                                                                                                                                     |
-| `repoRoot`        | `string`                        | Codebase root for source tracing (text-search fallback). Defaults to the server cwd.                                                                                                                                 |
-| `mode`            | `"local" \| "hosted"`           | Trust boundary. `local` (default) allows `file://` and local paths; `hosted` blocks them and private-network hosts (SSRF protection) and requires `repoRoot`.                                                        |
-| `computedStyle`   | `"minimal" \| "full" \| "none"` | Computed-style verbosity per region. `minimal` (default) keeps color-candidate properties + values differing from the parent (~70% fewer properties, ~37% smaller payload); `full` returns all 50+; `none` omits it. |
+| Argument          | Type                            | Description                                                                                                           |
+| ----------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `url`             | `string` (required)             | Live URL to screenshot — `http(s)` or `file` URL.                                                                     |
+| `designImagePath` | `string` (required)             | Design image (`.png`, `.jpg`, `.jpeg`) **or an http(s) image URL** (e.g. a Figma export link).                        |
+| `viewport`        | `{width, height}`               | CSS-pixel viewport. Defaults to the design image's dimensions.                                                        |
+| `outputDir`       | `string`                        | Where to write artifacts. Defaults to a fresh temp dir.                                                               |
+| `waitForSelector` | `string`                        | CSS selector to wait for before screenshotting.                                                                       |
+| `waitMs`          | `number`                        | Extra settle time after load, in ms (≤ 60s).                                                                          |
+| `diffThreshold`   | `number` (0–1)                  | pixelmatch sensitivity. Smaller = more sensitive. Default `0.1`.                                                      |
+| `repoRoot`        | `string`                        | Codebase root for source tracing. Defaults to the server cwd (required in `hosted` mode).                             |
+| `mode`            | `"local" \| "hosted"`           | Trust boundary: `local` (default) allows `file://`/local paths; `hosted` blocks them + private networks (SSRF guard). |
+| `computedStyle`   | `"minimal" \| "full" \| "none"` | Computed-style verbosity per region. `minimal` (default) keeps color candidates + values differing from the parent.   |
 
-The tool declares an **output schema**, so MCP clients receive a typed
-`structuredContent` payload (plus the JSON text) without parsing strings. The
-result also reports `trace.status` (`skipped`/`ok`/`partial`/`failed`) and
-`trace.warnings` so tracing issues are never silently swallowed.
+The tool declares an **output schema**: MCP clients receive typed
+`structuredContent` (validated) plus the JSON text. Every call reports
+`trace.status` (`skipped`/`ok`/`partial`/`failed`) and `trace.warnings` — issues
+are never silently swallowed.
 
 Example result (abridged):
 
@@ -157,8 +162,6 @@ Example result (abridged):
 {
   "status": "diff",
   "similarity": 0.9951,
-  "diffPixelCount": 2340,
-  "totalPixelCount": 480000,
   "diffRatio": 0.0049,
   "regions": [
     {
@@ -169,9 +172,7 @@ Example result (abridged):
       "height": 36,
       "pixelCount": 4120,
       "coverage": 0.99,
-      "areaRatio": 0.009,
       "meanDelta": 0.52,
-      "maxDelta": 0.83,
       "score": 0.58,
       "severity": "high",
       "source": {
@@ -180,13 +181,15 @@ Example result (abridged):
           "id": null,
           "classes": ["btn-primary"],
           "selector": "button.btn-primary",
-          "computedStyle": { "background-color": "rgb(220, 38, 38)", "color": "rgb(255, 255, 255)" }
+          "computedStyle": { "background-color": "rgb(220, 38, 38)" }
         },
         "rules": [
           {
             "selector": ".btn-primary",
             "media": null,
-            "applies": true,
+            "supports": null,
+            "container": null,
+            "applies": "yes",
             "properties": ["background-color"],
             "declared": { "background-color": "#dc2626" },
             "source": {
@@ -212,14 +215,12 @@ Example result (abridged):
             "token": {
               "name": "--color-success",
               "reference": "var(--color-success)",
-              "value": "#16a34a",
-              "file": "src/styles/tokens.css",
-              "line": 12,
               "kind": "css-variable"
             },
             "confidence": "high"
           }
-        ]
+        ],
+        "notes": []
       }
     }
   ],
@@ -237,49 +238,51 @@ Example result (abridged):
   "artifacts": {
     "screenshotPath": "/var/folders/.../example.com-screenshot.png",
     "diffImagePath": "/var/folders/.../example.com-diff.png",
-    "designImagePath": "/repo/designs/home.png"
+    "designImagePath": "/repo/designs/home.png",
+    "designImageSource": "/repo/designs/home.png"
   },
+  "trace": { "status": "ok", "warnings": [] },
   "repoRoot": "/repo"
 }
 ```
 
-**Severity formula:** `score = 0.6·meanDelta + 0.25·coverage + 0.15·min(1, areaRatio·10)`,
-with `high ≥ 0.5`, `medium ≥ 0.2`, `low < 0.2`. `meanDelta` is the mean per-pixel
-perceptual color delta (YIQ-weighted, normalized 0–1), `coverage` is the fraction
-of the region's bounding box that actually differs, and `areaRatio` is the
-region's share of the viewport.
+**Severity:** `score = 0.6·meanDelta + 0.25·coverage + 0.15·min(1, areaRatio·10)`,
+`high ≥ 0.5`, `medium ≥ 0.2`, `low < 0.2`.
 
-## Source tracing
+## How it works
 
-Each diff region is resolved to a DOM element and the CSS rules styling it, and
-each rule gets a best-effort original source location, in this order:
+1. **Capture** — the URL is screenshotted deterministically (animations killed,
+   fonts awaited, fixed locale/timezone).
+2. **Diff** — the screenshot is diffed against the design image (pixelmatch);
+   differing pixels are clustered into connected regions, merged when close,
+   and scored by severity.
+3. **Trace** — each region's element and its CSS rules are resolved to real
+   source locations: CSS source maps first, then gitignore-aware text search,
+   then plain DOM evidence — never a guessed file.
+4. **Patch** — the design color is sampled from the image at the region, the
+   cascade winner (specificity / order / `!important`) is found, and the
+   smallest change is suggested, preferring the project's own design tokens.
 
-1. **CSS source maps** — the standard, build-tool-agnostic mechanism (Sass,
-   Less, PostCSS, Tailwind, Webpack, Vite all emit them). The server reads each
-   stylesheet's text, parses it (css-tree), maps each rule's byte offset through
-   the source map, and returns the original `file:line:column` →
-   `confidence: "high"`. This works regardless of what templating language
-   generated the HTML, because it operates at the compiled-CSS layer.
-2. **Gitignore-aware text search** — the rule's selector is searched across
-   `repoRoot` with gitignore semantics (ripgrep-style: nested `.gitignore`s and
-   negations respected, `node_modules` never searched). A match in a
-   non-ignored file → `confidence: "medium"`; a match only in gitignored paths
-   (compiled/build output) is reported but flagged `gitignored: true` and
-   deprioritized → `confidence: "low"`.
-3. **DOM/computed-style evidence only** — if nothing resolves, the element
-   evidence is returned as-is with `confidence: "low"`. The server never guesses
-   a file.
+### Source tracing order
 
-The server deliberately stops at accurate, structured signals — the calling
-agent (Claude Code, Cursor, ...) reads the repo and maps `file:line:column`
-hints to its own framework's conventions. Universal selectors (`*`,
-`*::before`) are filtered out as non-region-specific noise.
+1. **CSS source maps** — the standard build-tool-agnostic mechanism (Sass,
+   Less, PostCSS, Tailwind, Webpack, Vite all emit them). Each rule's byte
+   offset maps through the source map to the original `file:line:column` →
+   `confidence: "high"`. Works regardless of the templating language, because it
+   operates at the compiled-CSS layer.
+2. **Gitignore-aware text search** — the selector is searched across `repoRoot`
+   (nested `.gitignore`s and negations respected, `node_modules` never
+   searched). Non-ignored source → `"medium"`; matches only in gitignored
+   (build) paths → `"low"`; matches in test/docs files are deprioritized.
+3. **DOM evidence only** — if nothing resolves, the element + computed style
+   are returned as-is with `confidence: "low"`.
 
-## Minimal patches
+### Minimal patches
 
-For every traced rule that declares a color-ish property, the server derives the
-design's intended value by sampling the design image at the region (dominant
-opaque color), and emits the smallest possible change:
+For color diffs the server derives the design's intended value by sampling the
+design image at the region and emits **one** smallest-possible change,
+preferring tokens the project already defines — CSS custom properties,
+Tailwind configs, style-dictionary JSON:
 
 ```json
 {
@@ -290,139 +293,102 @@ opaque color), and emits the smallest possible change:
   "current": "#dc2626",
   "suggested": "var(--color-success)",
   "value": "#16a34a",
-  "token": { "name": "--color-success", "kind": "css-variable", ... },
   "confidence": "high"
 }
 ```
 
-Token preference: the server scans `repoRoot` for design tokens the project
-already defines — **CSS custom properties** (`--x: #hex;` in `.css`/`.scss`/
-`.less`), **Tailwind configs** (`tailwind.config.{js,ts}` colors), and
-**style-dictionary JSON** (`"color.success": { "value": "#16a34a" }`) — and
-suggests the token reference (`var(--color-success)`) instead of a new hardcoded
-value when the design color matches one. Patches are only emitted when the rule
-has an anchorable source location and the declared value actually differs from
-the design; layout geometry is left to the agent's judgment. The server never
-proposes component rewrites — the output is always a single-property change.
+When a patch has no anchor (e.g. the culprit color is inherited from an
+ancestor, or set by an inline style), the result explains it in `notes[]`
+instead of guessing.
 
 ## Designs from Figma
 
-The tool intentionally works from **flat images only** — but the [official Figma
-Dev Mode MCP server](https://www.figma.com/developers/docs/dev-mode/mcp)
-(`https://mcp.figma.com/mcp`, already usable from Codex/Claude) is the perfect
-bridge: it exports any frame/node to an image, and this server diffs that image
-against the live page. The agent orchestrates both servers; `mcp-perfectpixel`
-never talks to Figma itself.
+`mcp-perfectpixel` works from **flat images only** — the [official Figma Dev
+Mode MCP](https://www.figma.com/developers/docs/dev-mode/mcp) is the perfect
+bridge: it exports any frame/node to an image, and this server verifies the
+final render against it. The agent orchestrates both; `mcp-perfectpixel` never
+talks to Figma itself.
 
-**Workflow ("implement this design from Figma"):**
+**Workflow — "implement this design from Figma":**
 
-1. **Figma MCP** — export the node to an image (`get_image`-style tool). It
-   returns an export URL (or you can use the standalone helper below).
-2. **mcp-perfectpixel** — call `capture_and_diff` with:
-   - `designImagePath` = the Figma export **URL** (fetched automatically) or a
-     locally saved PNG,
-   - `url` = the live page / dev server,
-   - `repoRoot` = the codebase being implemented.
-3. Read the returned regions + source locations + minimal patches, and apply
-   the smallest fixes (Goal 3) — verified pixel-by-pixel against the Figma
-   design.
+1. **Figma MCP** — export the node (`get_image`-style tool) → an image URL.
+2. **mcp-perfectpixel** — `capture_and_diff` with `designImagePath` = that URL
+   (fetched automatically), `url` = the live page, `repoRoot` = the codebase.
+3. Apply the returned regions + patches, re-run until `similarity: 1.0`.
 
-**Standalone export (no Figma MCP needed, works with any client):**
+**Standalone export** (no Figma MCP needed):
 
 ```bash
 export FIGMA_TOKEN=figd_...   # create at https://www.figma.com/developers/api#access-tokens
 node examples/figma-export.mjs \
-  "https://www.figma.com/design/WNtRe4ND67vCwA0TvIShFk/...?node-id=1689-7871" \
-  -o /tmp/design.png
+  "https://www.figma.com/design/FILE_KEY/slug?node-id=1689-7871" -o /tmp/design.png
 
 node examples/demo.mjs /tmp/design.png https://localhost:3000
-# or pass the export URL straight to the MCP tool as designImagePath
 ```
 
 ## Design philosophy
 
-- **Structured evidence, not framework knowledge.** The MCP server's job ends at
-  DOM-scale regions + color deltas + severity + artifacts. It never guesses what
-  generated the HTML/CSS; the calling agent owns that.
-- **Determinism is a feature.** Fixed locale/timezone/color scheme, animations
-  killed, fonts awaited — the same page diffed twice produces byte-identical
-  screenshots, which is what makes diffing meaningful.
+- **Structured evidence, not framework knowledge.** The server's job ends at
+  regions + element + rules + confidence + patches. It never guesses what
+  generated the HTML/CSS — the calling agent owns that.
+- **Determinism is a feature.** Same page, same design, same bytes — which is
+  what makes pixel diffing meaningful.
 - **Minimal, swappable core.** The engine lives in `@mcp-perfectpixel/core`
-  (framework-agnostic, no MCP dependency) so future adapters and tooling can
-  reuse it without pulling in the protocol layer.
-
-## Hardening
-
-- **Cascade-correct patches** — a patch always targets the cascade winner for
-  the single most likely culprit property (specificity, declaration order,
-  `!important`; shorthands participate in their longhand cascade). Duplicate
-  selectors map to their **own** source-map positions — no shared counters.
-- **Conditional CSS** — `@media` via `matchMedia()`, `@supports` via
-  `CSS.supports()`; `@container` is reported as `applies: "unknown"` rather
-  than guessed. Pseudo-element rules never match the element.
-- **Inheritance** — when the culprit color is inherited (no rule on the element
-  declares it), the result carries a `notes[]` hint with the parent's computed
-  value instead of guessing a file.
-- **Resource limits** — viewport ≤ 16.7M px / 8192 side, `waitMs` ≤ 60s, design
-  images ≤ 50MB (checked with `stat()` before reading), ≤ 50 diff regions,
-  bounded candidate selectors (key-bucketed, so huge Tailwind stylesheets stay
-  fast), fetch timeouts, and source/token scans capped at 5MB files.
-- **Trust boundary** — `mode: "local"` (default) allows `file://` and local
-  paths; `mode: "hosted"` blocks them and private-network hosts (SSRF
-  protection) and requires an explicit `repoRoot`.
-- **Session-aware stylesheets** — stylesheets are fetched through the browser's
-  request context, so cookies/session apply and the traced CSS matches what the
-  page actually rendered.
-- **Honest tracing** — failures and truncations are reported via
-  `trace.status` / `trace.warnings`; text-search matches in tests/docs/generated
-  files are deprioritized and lower confidence.
-- **Token-friendly output** — long floats are rounded, computed style is
-  trimmed to what matters by default (`computedStyle: "minimal"`), and repo
-  walks share one stat/mtime file cache with parallel reads — measured ~37%
-  smaller payloads and ~58% faster capture+trace on a real workspace.
-- **Secret hygiene** — `.env`/`.npmrc` are gitignored; CI runs Gitleaks and the
-  publish workflow runs lint + the full test suite before releasing.
+  (framework-agnostic, no MCP dependency), so future tooling can reuse it.
 
 ### The boundary (what the server will never do)
 
-Goal 4 is a hard design constraint, not a feature: the server supplies
-structured signals and **stops there** — the calling agent (Claude Code,
-Cursor, DeepSeek Agent) reads the full repo and understands its own
-conventions. Concretely, the server never:
+- parse templates or Figma files — tracing works at the compiled-CSS layer;
+- maintain per-framework parsers/adapters (Liquid, Stencil, ...) — at most an
+  optional community plugin, never a core dependency;
+- propose full component rewrites — output is always a single-property change;
+- apply patches or edit files itself — it reports
+  `file:line:column` + `current → suggested`, the agent decides.
 
-- parses or understands templates (Liquid, Handlebars, JSX, Blade, Razor, ...) —
-  tracing operates at the compiled-CSS layer and via plain text search, so it
-  works identically on any templating language;
-- maintains per-framework parsers or adapters — if source-map + text search ever
-  proves insufficient for a framework, that becomes an optional community
-  plugin, never a core dependency;
-- proposes full component rewrites — patch output is always a single-property
-  change anchored to a real source location;
-- applies patches or edits files itself — it reports `file:line:column` and
-  `current → suggested`, and the agent decides.
+## Hardening
+
+- **Cascade-correct patches** — specificity, declaration order, `!important`;
+  duplicate selectors map to their own source positions.
+- **Conditional CSS** — `@media` via `matchMedia()`, `@supports` via
+  `CSS.supports()`, `@container` reported as `applies: "unknown"`; pseudo-element
+  rules never match the element.
+- **Resource limits** — viewport ≤ 16.7M px, design ≤ 50MB (stat before read),
+  ≤ 50 regions, bounded candidate selectors, fetch timeouts, capped file scans.
+- **Trust boundary** — `mode: "local"` / `"hosted"` with SSRF + `file://`
+  protection and an explicit `repoRoot` requirement.
+- **Session-aware stylesheets** — fetched through the browser's request context,
+  so cookies apply and the traced CSS matches what the page rendered.
+- **Honest tracing** — `trace.status`/`warnings` report failures and
+  truncations; text-search matches in tests/docs/generated files are
+  deprioritized.
+- **Token-friendly output** — rounded floats, trimmed computed style, shared
+  repo-walk cache with parallel reads (~37% smaller payloads, ~58% faster).
+- **Secret hygiene** — `.env`/`.npmrc` gitignored; CI runs Gitleaks, lint,
+  build, tests and coverage; the publish workflow re-runs everything before
+  releasing.
 
 ## Roadmap
 
 - [x] **Goal 1 — Deterministic capture + pixel diff**
-- [x] **Goal 2 — Trace diffs to real source** — CSS source maps first, then
-      gitignore-aware text search, with confidence scoring — never a guess.
-- [x] **Goal 3 — Minimal patch output** — smallest change (file, line, property,
-      current → suggested), preferring tokens the project already defines.
-- [x] **Goal 4 — Structured context hand-off** — the server stops at accurate
-      signals; framework understanding stays with the calling agent.
-- [x] **Goal 5 — OSS conventions + release pipeline** — MIT, configs for Claude
-      Desktop/Cursor, CONTRIBUTING, CI, publish-on-tag for both packages, semver
-      from `v0.1.0`, discovery keywords. The first real release just needs an
-      `NPM_TOKEN` secret and a `v0.1.0` tag (see CONTRIBUTING).
+- [x] **Goal 2 — Trace diffs to real source** (CSS source maps → gitignore-aware
+      text search, with confidence scoring)
+- [x] **Goal 3 — Minimal patch output** preferring the project's own tokens
+- [x] **Goal 4 — Structured context hand-off** (no framework knowledge)
+- [x] **Goal 5 — OSS conventions + release pipeline** (semver from `v0.1.0`,
+      publish-on-tag for both packages)
+
+The first real release needs a `v0.1.0` tag and the `NPM_TOKEN` secret — see
+[CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Development
 
 ```bash
 pnpm install
 pnpm --filter @mcp-perfectpixel/core exec playwright install chromium
-pnpm lint        # eslint + prettier check
-pnpm build       # type-checked compile of all packages
-pnpm test        # unit tests + full e2e through the MCP stdio protocol
+pnpm lint        # eslint + prettier
+pnpm build       # type-checked compile of both packages
+pnpm test        # 104 unit + e2e tests through the MCP stdio protocol
+pnpm coverage    # vitest coverage (v8)
 ```
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md).
