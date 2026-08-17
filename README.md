@@ -271,6 +271,24 @@ proposes component rewrites — the output is always a single-property change.
   (framework-agnostic, no MCP dependency) so future adapters and tooling can
   reuse it without pulling in the protocol layer.
 
+### The boundary (what the server will never do)
+
+Goal 4 is a hard design constraint, not a feature: the server supplies
+structured signals and **stops there** — the calling agent (Claude Code,
+Cursor, DeepSeek Agent) reads the full repo and understands its own
+conventions. Concretely, the server never:
+
+- parses or understands templates (Liquid, Handlebars, JSX, Blade, Razor, ...) —
+  tracing operates at the compiled-CSS layer and via plain text search, so it
+  works identically on any templating language;
+- maintains per-framework parsers or adapters — if source-map + text search ever
+  proves insufficient for a framework, that becomes an optional community
+  plugin, never a core dependency;
+- proposes full component rewrites — patch output is always a single-property
+  change anchored to a real source location;
+- applies patches or edits files itself — it reports `file:line:column` and
+  `current → suggested`, and the agent decides.
+
 ## Roadmap
 
 - [x] **Goal 1 — Deterministic capture + pixel diff**

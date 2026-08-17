@@ -38,11 +38,16 @@ const PAGE_CSS = [
 const DESIGN_CSS = PAGE_CSS.replace('#1e40af', '#2563eb').replace('#dc2626', '#16a34a');
 
 function pageHtml(mysteryColor: string, cssHref: string): string {
+  // Deliberately looks like a server-rendered template (Liquid-style noise):
+  // comments, variable attributes, and `data-` hooks. The server must resolve
+  // regions purely from the compiled-CSS layer + DOM evidence, with zero
+  // knowledge of whatever templating language produced this HTML.
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <title>map-page</title>
+  <!-- {% comment %} template noise that must not affect tracing {% endcomment %} -->
   <link rel="stylesheet" href="${cssHref}" />
   <style>
     * { box-sizing: border-box; }
@@ -51,8 +56,9 @@ function pageHtml(mysteryColor: string, cssHref: string): string {
   </style>
 </head>
 <body>
-  <div class="header"></div>
-  <div class="card"><div class="button"></div></div>
+  <!-- {{ product.handle }} | {% if on_sale %}sale{% endif %} -->
+  <div class="header" data-handle="{{ product.handle }}"></div>
+  <div class="card"><div class="button" data-id="{{ button.id }}"></div></div>
   <span class="mystery" style="position:absolute;left:300px;top:300px;display:block;width:40px;height:40px;background-color:${mysteryColor}"></span>
 </body>
 </html>
@@ -205,5 +211,23 @@ describe('region source tracing (CSS source maps, then text search, then DOM evi
 
   it('exposes the repoRoot used for tracing', () => {
     expect(result.repoRoot).toBe(dir);
+  });
+
+  it('traces a templated page with zero framework knowledge (Goal 4 boundary)', async () => {
+    // The page HTML is littered with Liquid-style syntax (comments and
+    // `data-{{ }}` attributes). Resolution works purely at the compiled-CSS
+    // layer + DOM evidence — the server never parses the template.
+    const html = await import('node:fs/promises').then((fs) =>
+      fs.readFile(path.join(dir, 'page.html'), 'utf8'),
+    );
+    expect(html).toContain('{{ product.handle }}');
+    expect(html).toContain('{% comment %}');
+
+    const button = regionOf(result, 'button')!;
+    expect(button.source!.confidence).toBe('high');
+    expect(button.source!.rules.some((r) => r.selector === '.button')).toBe(true);
+    expect(button.source!.element.classes).toContain('button');
+    // The template noise produced no extra regions.
+    expect(result.regions).toHaveLength(3);
   });
 });

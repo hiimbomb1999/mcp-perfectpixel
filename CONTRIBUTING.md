@@ -56,6 +56,21 @@ them free of text and external assets so rendering stays deterministic across
 machines. The tracing e2e generates its own HTML/CSS/source-map into a temp dir,
 so no binary artifacts are committed.
 
+## Scope guardrails (Goal 4)
+
+The server's job stops at accurate, structured signals. Please do not add:
+
+- **Per-framework parsers or adapters** (Liquid, Stencil, JSX, ...) — tracing
+  must stay at the compiled-CSS layer + gitignore-aware text search. If a
+  framework genuinely needs more, it becomes an optional community plugin.
+- **Template or Figma parsing** — the tool works from flat images only.
+- **Patch application** — the server reports `file:line:column` and
+  `current → suggested`; it never edits files.
+- **Full-component rewrites** — patch output is always a single-property change.
+
+If you change behavior, make sure it stays framework-agnostic and add a test
+that proves it (templated-looking fixtures are welcome).
+
 ## Commit & PR conventions
 
 - Use clear, conventional commit messages (`feat:`, `fix:`, `test:`, `docs:`).
