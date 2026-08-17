@@ -87,6 +87,22 @@ Add to `.cursor/mcp.json`:
 }
 ```
 
+### Try it locally
+
+```bash
+pnpm install
+pnpm --filter @mcp-perfectpixel/core exec playwright install chromium
+pnpm build
+
+# diff the repo's own fixture page against its design
+node examples/demo.mjs /tmp/design.png \
+  "file://$PWD/packages/server/test/fixtures/page.html"
+```
+
+`examples/demo.mjs` renders a design PNG from the fixture and calls the engine
+directly (no MCP client needed) — see the script header for how to point it at
+your own design image and URL.
+
 ### From source
 
 ```bash
