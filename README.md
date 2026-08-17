@@ -87,6 +87,21 @@ Add to `.cursor/mcp.json`:
 }
 ```
 
+### Codex CLI
+
+Add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.mcp-perfectpixel]
+command = "/path/to/node"
+args = ["/path/to/mcp-perfectpixel/packages/server/dist/index.js"]
+```
+
+(Running from source: `command` is the absolute path to `node`, `args` points at
+the built server entry. Restart Codex after editing. The server's `repoRoot`
+defaults to the Codex session's working directory — your project — so tracing
+and token lookup work against the code you're editing.)
+
 ### Try it locally
 
 ```bash
