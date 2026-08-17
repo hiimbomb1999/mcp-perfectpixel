@@ -11,7 +11,7 @@ export interface DiffAnalysis {
   regions: DiffRegion[];
 }
 
-/** Bounding boxes whose gap is <= margin are merged into one region. */
+/** Bounding boxes with a gap of <= margin px are merged into one region. */
 const MERGE_MARGIN = 12;
 /** Diff clusters smaller than this are treated as noise and dropped. */
 const MIN_REGION_PIXELS = 4;
@@ -177,11 +177,15 @@ export function mergeComponents(components: number[][], margin: number, width: n
     const rb = find(b);
     if (ra !== rb) parent[ra] = rb;
   };
+  // Expand each box by margin/2 so that two components merge exactly when the
+  // GAP between them is <= margin (a box expanded by e on each side intersects
+  // another when gap <= 2e).
+  const half = margin / 2;
   const expanded = (box: Box) => ({
-    x1: box.x1 - margin,
-    y1: box.y1 - margin,
-    x2: box.x2 + margin,
-    y2: box.y2 + margin,
+    x1: box.x1 - half,
+    y1: box.y1 - half,
+    x2: box.x2 + half,
+    y2: box.y2 + half,
   });
   for (let i = 0; i < n; i++) {
     const a = expanded(boxes[i]!);

@@ -177,7 +177,11 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
       artifacts: {
         screenshotPath,
         diffImagePath,
-        designImagePath: path.resolve(designImagePath),
+        // Remote design images stay URLs — never path.resolve() them.
+        designImagePath: /^https?:\/\//i.test(designImagePath)
+          ? designImagePath
+          : path.resolve(designImagePath),
+        designImageSource: designImagePath,
       },
       trace: { status: traceStatus, warnings: traceWarnings },
       repoRoot,

@@ -215,8 +215,10 @@ export interface DiffArtifacts {
   screenshotPath: string;
   /** Absolute path to the diff visualization (PNG; differing pixels highlighted). */
   diffImagePath: string;
-  /** Absolute path to the design image used for the comparison. */
+  /** The design image used: absolute local path, or the remote URL as given. */
   designImagePath: string;
+  /** The exact designImagePath value passed to the capture. */
+  designImageSource: string;
 }
 
 export interface DiffResult {

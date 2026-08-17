@@ -120,9 +120,14 @@ async function callCapture(
     },
   });
   expect(response.isError).toBeFalsy();
+  // The tool declares an output schema: structuredContent is returned so
+  // clients don't have to parse the JSON text.
+  expect(response.structuredContent).toBeDefined();
   const text = response.content.find((c) => c.type === 'text');
   expect(text).toBeDefined();
-  return JSON.parse((text as { type: 'text'; text: string }).text) as CaptureResult;
+  const parsed = JSON.parse((text as { type: 'text'; text: string }).text) as CaptureResult;
+  expect((response.structuredContent as { status?: string }).status).toBe(parsed.status);
+  return parsed;
 }
 
 beforeAll(async () => {

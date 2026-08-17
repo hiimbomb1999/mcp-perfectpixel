@@ -278,7 +278,7 @@ export async function traceRegions(
   const loaded = new Map<number, LoadedSheet>();
   for (const info of sheetsInfo) {
     if (info.skipped) continue;
-    const sheet = await loadSheet(info, mode);
+    const sheet = await loadSheet(info, mode, page);
     if (!sheet) continue;
     const mapUrl = extractSourceMappingUrl(sheet.text);
     const map = mapUrl ? await loadMap(mapUrl, sheet.baseUrl, mode) : null;
@@ -657,6 +657,7 @@ function normalizeSourceFile(raw: string, baseUrl: string | null, repoRoot: stri
 async function loadSheet(
   info: SheetInfo,
   mode: Mode,
+  page: Page,
 ): Promise<{ text: string; baseUrl: string | null } | null> {
   if (info.inlineText !== null) {
     return { text: info.inlineText, baseUrl: null };
@@ -669,8 +670,10 @@ async function loadSheet(
         return { text, baseUrl: info.href };
       }
       assertTargetAllowed(info.href, mode, 'stylesheet');
-      const res = await fetch(info.href, { signal: AbortSignal.timeout(15_000) });
-      if (!res.ok) return null;
+      // Fetch through the browser's request context so cookies/session of the
+      // page apply and the content matches what the browser actually loaded.
+      const res = await page.request.get(info.href, { timeout: 15_000 });
+      if (!res.ok()) return null;
       return { text: await res.text(), baseUrl: info.href };
     } catch {
       return null;

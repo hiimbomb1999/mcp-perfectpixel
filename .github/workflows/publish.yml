@@ -27,8 +27,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install Chromium
+        run: pnpm --filter @mcp-perfectpixel/core exec playwright install --with-deps chromium
+
+      - name: Lint
+        run: pnpm lint
+
       - name: Build
         run: pnpm build
+
+      - name: Test
+        run: pnpm test
 
       - name: Verify tag matches package versions
         run: |
