@@ -10,6 +10,9 @@ dist/
 coverage/
 .perfectpixel/
 
+# Gitleaks SARIF report (written to the repo root during CI)
+*.sarif
+
 # Secrets — never commit these
 .env
 .env.*
