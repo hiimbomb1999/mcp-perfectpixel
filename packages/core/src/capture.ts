@@ -7,6 +7,7 @@ import { PNG } from 'pngjs';
 import { decodeImage, decodePng, resizeRgba } from './pixels.js';
 import { diffImages } from './diff.js';
 import { traceRegions } from './trace.js';
+import { assertViewportOk, MAX_REGIONS, MAX_WAIT_MS } from './limits.js';
 import type { CaptureOptions, DiffResult, RgbaImage } from './types.js';
 
 /**
@@ -52,9 +53,14 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
   } = options;
   const repoRoot = path.resolve(options.repoRoot ?? process.cwd());
   const trace = options.trace ?? true;
+  if (waitMs !== undefined && waitMs > MAX_WAIT_MS) {
+    throw new Error(`waitMs ${waitMs} exceeds the maximum of ${MAX_WAIT_MS}`);
+  }
 
   const design = await decodeImage(designImagePath);
+  assertViewportOk(design.width, design.height, 'design image');
   const viewport = options.viewport ?? { width: design.width, height: design.height };
+  assertViewportOk(viewport.width, viewport.height);
   const designPixels: RgbaImage =
     viewport.width === design.width && viewport.height === design.height
       ? design
@@ -107,23 +113,31 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
     const screenshotPixels = decodePng(screenshot);
     const analysis = diffImages(designPixels, screenshotPixels, { threshold: diffThreshold });
 
+    // Cap the number of diff regions (top by score) to keep tracing bounded.
+    let regions = analysis.regions;
+    const traceWarnings: string[] = [];
+    if (regions.length > MAX_REGIONS) {
+      regions = regions.slice(0, MAX_REGIONS);
+      traceWarnings.push(
+        `regions truncated: ${analysis.regions.length} found, keeping the top ${MAX_REGIONS}`,
+      );
+    }
+
     // Goal 2+3: resolve each region to a DOM element, real source location, and
     // minimal patch suggestions. Best-effort — failures never fail the capture,
     // but they ARE reported through result.trace instead of being swallowed.
-    let regions = analysis.regions;
     let traceStatus: 'skipped' | 'ok' | 'partial' | 'failed' = 'skipped';
-    let traceWarnings: string[] = [];
     if (trace && regions.length > 0) {
       try {
         const traced = await traceRegions(page, regions, { repoRoot, design: designPixels });
         regions = traced.regions;
-        traceStatus = traced.warnings.length > 0 ? 'partial' : 'ok';
-        traceWarnings = traced.warnings;
+        traceWarnings.push(...traced.warnings);
+        traceStatus = traceWarnings.length > 0 ? 'partial' : 'ok';
       } catch (error) {
         traceStatus = 'failed';
-        traceWarnings = [
+        traceWarnings.push(
           `source tracing failed: ${error instanceof Error ? error.message : String(error)}`,
-        ];
+        );
       }
     }
 

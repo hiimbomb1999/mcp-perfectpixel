@@ -6,7 +6,7 @@
  * gitignored paths are still reported but flagged so they can be
  * deprioritized (build output, not the real source).
  */
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, stat as fstat } from 'node:fs/promises';
 import path from 'node:path';
 import ignore, { type Ignore } from 'ignore';
 
@@ -168,18 +168,25 @@ async function scanFile(
   wanted: Set<string>,
 ): Promise<void> {
   const absPath = path.join(root, relPath);
-  let stat;
+  // Check size with stat() BEFORE reading, so huge files never get loaded.
+  let size: number;
   try {
-    stat = await readFile(absPath);
+    size = (await fstat(absPath)).size;
   } catch {
     return;
   }
-  if (stat.length > MAX_FILE_BYTES) return;
-  if (stat.length > 0 && stat.subarray(0, BINARY_SNIFF_BYTES).includes(0)) return; // binary
+  if (size > MAX_FILE_BYTES) return;
+  let buffer: Buffer;
+  try {
+    buffer = await readFile(absPath);
+  } catch {
+    return;
+  }
+  if (buffer.length > 0 && buffer.subarray(0, BINARY_SNIFF_BYTES).includes(0)) return; // binary
 
   let text: string;
   try {
-    text = stat.toString('utf8');
+    text = buffer.toString('utf8');
   } catch {
     return;
   }

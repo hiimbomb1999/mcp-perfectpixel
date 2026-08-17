@@ -1,13 +1,15 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { PNG } from 'pngjs';
 import { decode as decodeJpeg } from 'jpeg-js';
 import type { RgbaImage } from './types.js';
+import { FETCH_TIMEOUT_MS, MAX_DESIGN_FILE_BYTES } from './limits.js';
 
 /**
  * Decode a design image into an RGBA raster. `designPath` may be a local
  * `.png`/`.jpg`/`.jpeg` file OR an http(s) image URL (e.g. a Figma export
- * link) which is fetched and decoded.
+ * link) which is fetched and decoded. File size is checked with `stat()`
+ * before reading (or via the HTTP Content-Length) and fetches time out.
  */
 export async function decodeImage(designPath: string): Promise<RgbaImage> {
   let buffer: Buffer;
@@ -15,7 +17,7 @@ export async function decodeImage(designPath: string): Promise<RgbaImage> {
   if (/^https?:\/\//i.test(designPath)) {
     let res: Response;
     try {
-      res = await fetch(designPath);
+      res = await fetch(designPath, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to fetch design image ${designPath} — ${reason}`);
@@ -25,7 +27,14 @@ export async function decodeImage(designPath: string): Promise<RgbaImage> {
         `Failed to fetch design image ${designPath} — HTTP ${res.status} ${res.statusText}`,
       );
     }
+    const declaredLength = Number(res.headers.get('content-length') ?? 0);
+    if (declaredLength > MAX_DESIGN_FILE_BYTES) {
+      throw new Error(`Design image too large: ${declaredLength} bytes (> 50MB)`);
+    }
     buffer = Buffer.from(await res.arrayBuffer());
+    if (buffer.length > MAX_DESIGN_FILE_BYTES) {
+      throw new Error(`Design image too large: ${buffer.length} bytes (> 50MB)`);
+    }
     try {
       ext = path.extname(new URL(designPath).pathname).toLowerCase();
     } catch {
@@ -36,6 +45,10 @@ export async function decodeImage(designPath: string): Promise<RgbaImage> {
       return sniffDecode(buffer, designPath);
     }
   } else {
+    const size = (await stat(designPath)).size;
+    if (size > MAX_DESIGN_FILE_BYTES) {
+      throw new Error(`Design image too large: ${size} bytes (> 50MB)`);
+    }
     buffer = await readFile(designPath);
     ext = path.extname(designPath).toLowerCase();
   }

@@ -10,7 +10,7 @@
  * already defines (CSS custom properties, Tailwind config, style-dictionary
  * JSON), the token reference is suggested instead of a new hardcoded value.
  */
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { GitignoreMatcher } from './search.js';
 import { compareSpecificity, type Specificity } from './css.js';
@@ -480,8 +480,9 @@ async function scanStyleDictionary(
 
 async function readText(absPath: string): Promise<string | null> {
   try {
+    const size = (await stat(absPath)).size;
+    if (size > 5 * 1024 * 1024) return null; // check with stat() before reading
     const buf = await readFile(absPath);
-    if (buf.length > 5 * 1024 * 1024) return null;
     if (buf.length > 0 && buf.subarray(0, 8192).includes(0)) return null; // binary
     return buf.toString('utf8');
   } catch {
