@@ -41,3 +41,16 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+      # Runs the suite again with V8 coverage; the e2e tests reuse the Chromium
+      # installed above (no PLAYWRIGHT_BROWSERS_PATH override needed here).
+      - name: Coverage
+        run: pnpm exec vitest run --coverage
+
+      # Uploads the coverage report (coverage/clover.xml) to Codecov. No token
+      # configured → no-op.
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}

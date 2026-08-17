@@ -88,11 +88,20 @@ that proves it (templated-looking fixtures are welcome).
 
 ## Releasing
 
-Releases are cut by pushing a tag (see `.github/workflows/publish.yml`). Both
-packages must stay on the same semver:
+Releases use [Changesets](https://github.com/changesets/changesets). Describe
+each change as it lands with `pnpm changeset`, then apply the version bumps
+and changelog entries when it's time to release:
 
 ```bash
-pnpm -r version 0.1.1          # bumps core + server and tags both
+pnpm changeset          # describe the change (choose a bump for both packages)
+pnpm changeset version  # apply version bumps + changelog entries
+```
+
+Both packages must stay on the same semver. After the version commit is merged,
+the publish workflow (see `.github/workflows/publish.yml`) runs on `v*` tags:
+
+```bash
+git tag v0.1.1
 git push --follow-tags
 ```
 

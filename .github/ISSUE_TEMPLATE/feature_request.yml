@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest an idea for mcp-perfectpixel
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What problem are you trying to solve? Note the scope guardrails — the server stops at structured evidence, so no per-framework parsers and no patch application.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How should this work? Be as concrete as you can (behavior, output shape, MCP tool surface).
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: What alternatives have you considered, and why are they insufficient?
+    validations:
+      required: false

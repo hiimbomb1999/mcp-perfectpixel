@@ -1,0 +1,49 @@
+name: Bug report
+description: Report a bug in mcp-perfectpixel (capture, diff, tracing, patches, or the MCP server)
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: input
+    id: reproduction
+    attributes:
+      label: To reproduce
+      description: The page URL and/or design image path you passed to `capture_and_diff` (e.g. `https://example.com` vs `/path/to/design.png`).
+      placeholder: 'url: https://example.com, designImagePath: /repo/designs/home.png'
+    validations:
+      required: true
+  - type: textarea
+    id: expected-vs-actual
+    attributes:
+      label: Expected vs actual
+      description: What did you expect to happen, and what actually happened instead?
+    validations:
+      required: true
+  - type: input
+    id: client-node
+    attributes:
+      label: MCP client & Node version
+      description: Which MCP client (Claude Desktop, Cursor, Codex, ...) and which Node.js version?
+      placeholder: 'Claude Desktop 1.0.x, Node 22.x'
+    validations:
+      required: true
+  - type: textarea
+    id: relevant-output
+    attributes:
+      label: Relevant output
+      description: The tool result — especially `trace.status`, `trace.warnings`, the regions count, and any error messages.
+      placeholder: 'trace.status: partial; regions: 3; error: ...'
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and browser version (e.g. macOS 14.5, Chrome 126 / Playwright Chromium).
+    validations:
+      required: false
