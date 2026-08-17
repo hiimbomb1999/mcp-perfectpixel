@@ -10,6 +10,12 @@ dist/
 coverage/
 .perfectpixel/
 
+# Secrets — never commit these
+.env
+.env.*
+!.env.example
+.npmrc
+
 # Editor / OS
 .DS_Store
 *.log
