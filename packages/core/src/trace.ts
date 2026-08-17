@@ -47,12 +47,7 @@ import {
 import { searchSelectors, type TextMatch } from './search.js';
 import { buildPatches, findDesignTokens, type PatchRuleInput } from './patches.js';
 import { assertTargetAllowed, type Mode } from './security.js';
-import {
-  elementKeys,
-  selectorKeyOf,
-  specificityOf,
-  type Specificity,
-} from './css.js';
+import { elementKeys, selectorKeyOf, specificityOf, type Specificity } from './css.js';
 
 /** Cap on candidate selectors matched per sample point (huge stylesheets). */
 const MAX_CANDIDATES_PER_POINT = 300;
