@@ -133,16 +133,16 @@ pnpm --filter mcp-perfectpixel start
 
 Screenshots `url`, diffs it against `designImagePath`, returns regions + artifacts.
 
-| Argument          | Type                | Description                                                                          |
-| ----------------- | ------------------- | ------------------------------------------------------------------------------------ |
-| `url`             | `string` (required) | Live URL to screenshot — `http(s)` or `file` URL.                                    |
-| `designImagePath` | `string` (required) | Path to the static design image (`.png`, `.jpg`, `.jpeg`).                           |
-| `viewport`        | `{width, height}`   | CSS-pixel viewport. Defaults to the design image's dimensions.                       |
-| `outputDir`       | `string`            | Where to write artifacts. Defaults to a fresh temp dir.                              |
-| `waitForSelector` | `string`            | CSS selector to wait for before screenshotting.                                      |
-| `waitMs`          | `number`            | Extra settle time after load, in ms.                                                 |
-| `diffThreshold`   | `number` (0–1)      | pixelmatch sensitivity. Smaller = more sensitive. Default `0.1`.                     |
-| `repoRoot`        | `string`            | Codebase root for source tracing (text-search fallback). Defaults to the server cwd. |
+| Argument          | Type                | Description                                                                                                       |
+| ----------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `url`             | `string` (required) | Live URL to screenshot — `http(s)` or `file` URL.                                                                 |
+| `designImagePath` | `string` (required) | Path to the static design image (`.png`, `.jpg`, `.jpeg`) **or an http(s) image URL** (e.g. a Figma export link). |
+| `viewport`        | `{width, height}`   | CSS-pixel viewport. Defaults to the design image's dimensions.                                                    |
+| `outputDir`       | `string`            | Where to write artifacts. Defaults to a fresh temp dir.                                                           |
+| `waitForSelector` | `string`            | CSS selector to wait for before screenshotting.                                                                   |
+| `waitMs`          | `number`            | Extra settle time after load, in ms.                                                                              |
+| `diffThreshold`   | `number` (0–1)      | pixelmatch sensitivity. Smaller = more sensitive. Default `0.1`.                                                  |
+| `repoRoot`        | `string`            | Codebase root for source tracing (text-search fallback). Defaults to the server cwd.                              |
 
 Example result (abridged):
 
@@ -297,6 +297,40 @@ value when the design color matches one. Patches are only emitted when the rule
 has an anchorable source location and the declared value actually differs from
 the design; layout geometry is left to the agent's judgment. The server never
 proposes component rewrites — the output is always a single-property change.
+
+## Designs from Figma
+
+The tool intentionally works from **flat images only** — but the [official Figma
+Dev Mode MCP server](https://www.figma.com/developers/docs/dev-mode/mcp)
+(`https://mcp.figma.com/mcp`, already usable from Codex/Claude) is the perfect
+bridge: it exports any frame/node to an image, and this server diffs that image
+against the live page. The agent orchestrates both servers; `mcp-perfectpixel`
+never talks to Figma itself.
+
+**Workflow ("implement this design from Figma"):**
+
+1. **Figma MCP** — export the node to an image (`get_image`-style tool). It
+   returns an export URL (or you can use the standalone helper below).
+2. **mcp-perfectpixel** — call `capture_and_diff` with:
+   - `designImagePath` = the Figma export **URL** (fetched automatically) or a
+     locally saved PNG,
+   - `url` = the live page / dev server,
+   - `repoRoot` = the codebase being implemented.
+3. Read the returned regions + source locations + minimal patches, and apply
+   the smallest fixes (Goal 3) — verified pixel-by-pixel against the Figma
+   design.
+
+**Standalone export (no Figma MCP needed, works with any client):**
+
+```bash
+export FIGMA_TOKEN=figd_...   # create at https://www.figma.com/developers/api#access-tokens
+node examples/figma-export.mjs \
+  "https://www.figma.com/design/WNtRe4ND67vCwA0TvIShFk/...?node-id=1689-7871" \
+  -o /tmp/design.png
+
+node examples/demo.mjs /tmp/design.png https://localhost:3000
+# or pass the export URL straight to the MCP tool as designImagePath
+```
 
 ## Design philosophy
 

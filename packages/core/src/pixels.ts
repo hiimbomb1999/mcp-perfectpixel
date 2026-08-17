@@ -4,14 +4,58 @@ import { PNG } from 'pngjs';
 import { decode as decodeJpeg } from 'jpeg-js';
 import type { RgbaImage } from './types.js';
 
-/** Decode a PNG or JPG/JPEG file into an RGBA raster. */
-export async function decodeImage(filePath: string): Promise<RgbaImage> {
-  const buffer = await readFile(filePath);
-  const ext = path.extname(filePath).toLowerCase();
+/**
+ * Decode a design image into an RGBA raster. `designPath` may be a local
+ * `.png`/`.jpg`/`.jpeg` file OR an http(s) image URL (e.g. a Figma export
+ * link) which is fetched and decoded.
+ */
+export async function decodeImage(designPath: string): Promise<RgbaImage> {
+  let buffer: Buffer;
+  let ext: string;
+  if (/^https?:\/\//i.test(designPath)) {
+    let res: Response;
+    try {
+      res = await fetch(designPath);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to fetch design image ${designPath} — ${reason}`);
+    }
+    if (!res.ok) {
+      throw new Error(
+        `Failed to fetch design image ${designPath} — HTTP ${res.status} ${res.statusText}`,
+      );
+    }
+    buffer = Buffer.from(await res.arrayBuffer());
+    try {
+      ext = path.extname(new URL(designPath).pathname).toLowerCase();
+    } catch {
+      ext = '';
+    }
+    // A URL extension is a hint; fall back to sniffing the payload.
+    if (ext !== '.png' && ext !== '.jpg' && ext !== '.jpeg') {
+      return sniffDecode(buffer, designPath);
+    }
+  } else {
+    buffer = await readFile(designPath);
+    ext = path.extname(designPath).toLowerCase();
+  }
   if (ext === '.png') return decodePng(buffer);
   if (ext === '.jpg' || ext === '.jpeg') return decodeJpg(buffer);
   throw new Error(
-    `Unsupported image format "${ext}" for ${filePath} — expected .png, .jpg or .jpeg`,
+    `Unsupported image format "${ext}" for ${designPath} — expected .png, .jpg or .jpeg`,
+  );
+}
+
+/** Decode by content signature when the format can't be told from the path. */
+function sniffDecode(buffer: Buffer, source: string): RgbaImage {
+  if (buffer.length > 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e) {
+    return decodePng(buffer);
+  }
+  if (buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return decodeJpg(buffer);
+  }
+  throw new Error(
+    `Unsupported image payload for ${source} — expected PNG or JPEG data (or a .png/.jpg/.jpeg URL path)`,
   );
 }
 

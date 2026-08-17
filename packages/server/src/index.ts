@@ -39,7 +39,8 @@ server.tool(
     designImagePath: z
       .string()
       .describe(
-        'Path to the static design image (PNG or JPG), absolute or relative to the server cwd.',
+        'Path to the static design image (PNG or JPG), or an http(s) image URL ' +
+          '(e.g. a Figma export link). Absolute or relative to the server cwd.',
       ),
     viewport: z
       .object({

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { PNG } from 'pngjs';
-import { diffImages, resizeRgba, decodePng, decodeJpg } from '@mcp-perfectpixel/core';
+import { diffImages, resizeRgba, decodePng, decodeJpg, decodeImage } from '@mcp-perfectpixel/core';
 import type { RgbaImage } from '@mcp-perfectpixel/core';
 import { encode as encodeJpeg } from 'jpeg-js';
 
@@ -152,5 +154,30 @@ describe('decodePng / decodeJpg', () => {
     expect(Math.abs(decoded.data[0] - 200)).toBeLessThanOrEqual(15);
     expect(Math.abs(decoded.data[1] - 100)).toBeLessThanOrEqual(15);
     expect(Math.abs(decoded.data[2] - 50)).toBeLessThanOrEqual(15);
+  });
+
+  it('decodes an image from an http(s) URL (Figma export link support)', async () => {
+    const img = makeImage(4, 4, [10, 20, 30]);
+    const png = new PNG({ width: 4, height: 4 });
+    img.data.copy(png.data);
+    const pngBuf = PNG.sync.write(png);
+    const server = createServer((_req, res) => {
+      res.setHeader('content-type', 'image/png');
+      res.end(pngBuf);
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const decoded = await decodeImage(`http://127.0.0.1:${port}/export.png`);
+      expect(decoded.width).toBe(4);
+      expect(decoded.height).toBe(4);
+      expect([decoded.data[0], decoded.data[1], decoded.data[2]]).toEqual([10, 20, 30]);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('reports a clear error for an unreachable design URL', async () => {
+    await expect(decodeImage('http://127.0.0.1:1/nope.png')).rejects.toThrow(/Failed to fetch/);
   });
 });
