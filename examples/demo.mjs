@@ -1,4 +1,4 @@
-/* global console, process, document */
+/* global URL, console, process, document */
 /**
  * Quick local demo for mcp-perfectpixel's engine.
  *
