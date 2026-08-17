@@ -25,8 +25,19 @@ export function compareSpecificity(x: Specificity, y: Specificity): number {
 
 function specificityOfOne(selector: csstree.CssNode): Specificity {
   const s: Specificity = { a: 0, b: 0, c: 0 };
+  // :where() has zero specificity — including its arguments.
+  let whereDepth = 0;
   csstree.walk(selector, {
     enter(node: csstree.CssNode) {
+      if (node.type === 'PseudoClassSelector') {
+        if (node.name === 'where') {
+          whereDepth++;
+          return;
+        }
+        if (whereDepth === 0) s.b++;
+        return;
+      }
+      if (whereDepth > 0) return;
       switch (node.type) {
         case 'IdSelector':
           s.a++;
@@ -34,10 +45,6 @@ function specificityOfOne(selector: csstree.CssNode): Specificity {
         case 'ClassSelector':
         case 'AttributeSelector':
           s.b++;
-          break;
-        case 'PseudoClassSelector':
-          // :where() has zero specificity; the others count as a class.
-          if (node.name !== 'where') s.b++;
           break;
         case 'TypeSelector':
           if (node.name !== '*') s.c++;
@@ -48,6 +55,9 @@ function specificityOfOne(selector: csstree.CssNode): Specificity {
         default:
           break;
       }
+    },
+    leave(node: csstree.CssNode) {
+      if (node.type === 'PseudoClassSelector' && node.name === 'where') whereDepth--;
     },
   });
   return s;

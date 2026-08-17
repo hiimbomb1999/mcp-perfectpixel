@@ -8,6 +8,7 @@ import { decodeImage, decodePng, resizeRgba } from './pixels.js';
 import { diffImages } from './diff.js';
 import { traceRegions } from './trace.js';
 import { assertViewportOk, MAX_REGIONS, MAX_WAIT_MS } from './limits.js';
+import { assertTargetAllowed } from './security.js';
 import type { CaptureOptions, DiffResult, RgbaImage } from './types.js';
 
 /**
@@ -53,11 +54,19 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
   } = options;
   const repoRoot = path.resolve(options.repoRoot ?? process.cwd());
   const trace = options.trace ?? true;
+  const mode = options.mode ?? 'local';
+  if (mode === 'hosted' && options.repoRoot === undefined) {
+    throw new Error('repoRoot must be provided explicitly in hosted mode');
+  }
   if (waitMs !== undefined && waitMs > MAX_WAIT_MS) {
     throw new Error(`waitMs ${waitMs} exceeds the maximum of ${MAX_WAIT_MS}`);
   }
 
-  const design = await decodeImage(designImagePath);
+  // Trust boundary: validate every target before touching it.
+  assertTargetAllowed(url, mode, 'page URL');
+  assertTargetAllowed(designImagePath, mode, 'design image');
+
+  const design = await decodeImage(designImagePath, mode);
   assertViewportOk(design.width, design.height, 'design image');
   const viewport = options.viewport ?? { width: design.width, height: design.height };
   assertViewportOk(viewport.width, viewport.height);
@@ -129,7 +138,7 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
     let traceStatus: 'skipped' | 'ok' | 'partial' | 'failed' = 'skipped';
     if (trace && regions.length > 0) {
       try {
-        const traced = await traceRegions(page, regions, { repoRoot, design: designPixels });
+        const traced = await traceRegions(page, regions, { repoRoot, design: designPixels, mode });
         regions = traced.regions;
         traceWarnings.push(...traced.warnings);
         traceStatus = traceWarnings.length > 0 ? 'partial' : 'ok';

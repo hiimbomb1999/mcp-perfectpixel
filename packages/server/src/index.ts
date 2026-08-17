@@ -78,6 +78,13 @@ server.tool(
         'Root of the codebase to search for source locations (gitignore-aware text search). ' +
           'Defaults to the server working directory. CSS source maps resolve independently of this.',
       ),
+    mode: z
+      .enum(['local', 'hosted'])
+      .optional()
+      .describe(
+        "Trust boundary. 'local' (default) allows file:// URLs and local paths. 'hosted' blocks " +
+          'file://, local paths and private-network hosts (SSRF protection) and requires an explicit repoRoot.',
+      ),
   },
   async (args) => {
     try {
@@ -90,6 +97,7 @@ server.tool(
         waitMs: args.waitMs,
         diffThreshold: args.diffThreshold,
         repoRoot: args.repoRoot,
+        mode: args.mode,
       });
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],

@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   decodeMappings,
+  decodeSourceMap,
   decodeVLQ,
   extractSourceMappingUrl,
+  joinSourcePath,
   mapOffset,
   offsetToLineCol,
   originalPositionFor,
   parseSourceMap,
+  type SourceMapV3,
 } from '@mcp-perfectpixel/core';
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -100,5 +103,63 @@ describe('extractSourceMappingUrl + parseSourceMap', () => {
     );
     expect(map.sources).toEqual(['a.scss']);
     expect(() => parseSourceMap('{"version":3}')).toThrow(/Invalid source map/);
+  });
+});
+
+describe('decodeSourceMap (resolver)', () => {
+  function seg(genCol: number, src: number, line: number, col: number, name = 0): string {
+    return [vlq(genCol), vlq(src), vlq(line), vlq(col), vlq(name)].join('');
+  }
+
+  it('skips the optional names field of a segment', () => {
+    // 5-field segment on line 0 -> genCol 0, src 0, orig line 2, col 1 (+name).
+    const map: SourceMapV3 = {
+      version: 3,
+      sources: ['a.scss'],
+      names: ['n'],
+      mappings: seg(0, 0, 2, 1),
+    };
+    const resolver = decodeSourceMap(map);
+    expect(resolver.resolve(0, 0)).toEqual({ sourceIndex: 0, line: 2, column: 1 });
+  });
+
+  it('applies sourceRoot to source paths', () => {
+    const map: SourceMapV3 = {
+      version: 3,
+      sources: ['_buttons.scss'],
+      sourceRoot: 'src/styles/',
+      mappings: 'AAAA',
+    };
+    const resolver = decodeSourceMap(map);
+    expect(resolver.sourcePath(0)).toBe('src/styles/_buttons.scss');
+    expect(resolver.sourceRoot).toBe('src/styles/');
+  });
+
+  it('joins sourceRoot paths with ../ collapse', () => {
+    // 'src/' + '../base/_x.scss' resolves up out of src/ (URL semantics).
+    expect(joinSourcePath('src/', '../base/_x.scss')).toBe('base/_x.scss');
+    expect(joinSourcePath('src/', '/abs.scss')).toBe('/abs.scss');
+  });
+
+  it('resolves indexed maps with sections', () => {
+    const map: SourceMapV3 = {
+      version: 3,
+      sections: [
+        {
+          offset: { line: 0, column: 0 },
+          map: { version: 3, sources: ['a.scss'], mappings: 'AAAA' },
+        },
+        {
+          offset: { line: 10, column: 0 },
+          map: { version: 3, sources: ['b.scss'], mappings: 'AAAA' },
+        },
+      ],
+    };
+    const resolver = decodeSourceMap(map);
+    expect(resolver.resolve(0, 0)).toEqual({ sourceIndex: 0, line: 0, column: 0 });
+    expect(resolver.resolve(5, 0)).toEqual({ sourceIndex: 0, line: 0, column: 0 });
+    expect(resolver.resolve(10, 0)).toEqual({ sourceIndex: 1, line: 0, column: 0 });
+    expect(resolver.sourcePath(0)).toBe('a.scss');
+    expect(resolver.sourcePath(1)).toBe('b.scss');
   });
 });

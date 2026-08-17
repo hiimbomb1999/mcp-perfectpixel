@@ -31,9 +31,15 @@ export interface CaptureOptions {
   navigationTimeoutMs?: number;
   /**
    * Root of the codebase to search for source locations (text-search fallback,
-   * gitignore-aware). Defaults to `process.cwd()`.
+   * gitignore-aware). Defaults to `process.cwd()` — required in hosted mode.
    */
   repoRoot?: string;
+  /**
+   * Trust boundary: 'local' (default) allows file:// URLs and local paths;
+   * 'hosted' blocks file://, private-network hosts, and local paths (SSRF
+   * protection) and requires an explicit repoRoot.
+   */
+  mode?: 'local' | 'hosted';
   /**
    * Resolve each diff region to a DOM element and a best-effort source
    * location (CSS source maps first, then gitignore-aware text search).
@@ -93,6 +99,8 @@ export interface SourceLocation {
   via: 'source-map' | 'text-search';
   /** True when the file is gitignored (e.g. compiled/build output). */
   gitignored: boolean;
+  /** For text-search matches: where the match lives (source/test/docs/...). */
+  context?: 'source-css' | 'source' | 'test' | 'docs' | 'generated';
 }
 
 /** The DOM element sitting at a diff region. */

@@ -26,6 +26,8 @@ beforeAll(async () => {
   await writeFile(path.join(root, 'app.log'), 'noise\n');
   await writeFile(path.join(root, 'important.log'), '.button { color: black; }\n');
   await writeFile(path.join(root, 'README.md'), 'see .button docs\n');
+  // A file too big to scan (checked with stat() before reading).
+  await writeFile(path.join(root, 'src', 'huge.bin'), Buffer.alloc(6 * 1024 * 1024, 0x62));
 });
 
 afterAll(async () => {
@@ -74,5 +76,25 @@ describe('searchSelectors', () => {
     const match = results.get('.button')!.find((m) => m.file === 'src/app.css')!;
     expect(match.line).toBe(1);
     expect(match.column).toBe(1);
+    // css-family matches are classified as source-css.
+    expect(match.context).toBe('source-css');
+    expect(match.ruleHeader).toBe(true); // ".button {"
+  });
+
+  it('ranks rule-header matches over bare substrings and marks contexts', async () => {
+    const results = await searchSelectors(root, ['.button']);
+    const button = results.get('.button')!;
+    // src/app.css has ".button {" (rule header, source-css) — ranked first.
+    expect(button[0]!.file).toBe('src/app.css');
+    expect(button[0]!.ruleHeader).toBe(true);
+    // README.md match is a bare substring in docs context.
+    const readme = button.find((m) => m.file === 'README.md')!;
+    expect(readme.context).toBe('docs');
+    expect(readme.ruleHeader).toBe(false);
+  });
+
+  it('skips files larger than the scan limit (stat before read)', async () => {
+    const results = await searchSelectors(root, ['.button']);
+    expect(results.get('.button')!.some((m) => m.file === 'src/huge.bin')).toBe(false);
   });
 });

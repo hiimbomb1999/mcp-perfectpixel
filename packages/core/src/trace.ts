@@ -46,8 +46,8 @@ import {
 } from './sourcemap.js';
 import { searchSelectors, type TextMatch } from './search.js';
 import { buildPatches, findDesignTokens, type PatchRuleInput } from './patches.js';
+import { assertTargetAllowed, type Mode } from './security.js';
 import {
-  compareSpecificity,
   elementKeys,
   selectorKeyOf,
   specificityOf,
@@ -172,6 +172,8 @@ export interface TraceOptions {
   repoRoot: string;
   /** The (viewport-sized) design raster, for pixel-derived patch suggestions. */
   design: RgbaImage;
+  /** Trust boundary for stylesheet/source-map fetching. */
+  mode: Mode;
 }
 
 export interface TraceWarnings {
@@ -265,7 +267,7 @@ export async function traceRegions(
 ): Promise<{ regions: DiffRegion[]; warnings: string[] }> {
   const warnings: string[] = [];
   if (regions.length === 0) return { regions, warnings };
-  const { repoRoot } = options;
+  const { repoRoot, mode } = options;
 
   // Sample several points per region (center + quarter points) so the element
   // is found even when the center sits on a transparent/empty spot.
@@ -281,10 +283,10 @@ export async function traceRegions(
   const loaded = new Map<number, LoadedSheet>();
   for (const info of sheetsInfo) {
     if (info.skipped) continue;
-    const sheet = await loadSheet(info);
+    const sheet = await loadSheet(info, mode);
     if (!sheet) continue;
     const mapUrl = extractSourceMappingUrl(sheet.text);
-    const map = mapUrl ? await loadMap(mapUrl, sheet.baseUrl) : null;
+    const map = mapUrl ? await loadMap(mapUrl, sheet.baseUrl, mode) : null;
     const resolver = map ? decodeSourceMap(map) : null;
     const rules = parseRules(sheet.text, info.id);
     for (const rule of rules) {
@@ -331,15 +333,12 @@ export async function traceRegions(
   });
 
   // Phase 3: match candidates + evaluate @media / @supports conditions.
-  const media = [
-    ...new Set(
-      selectorList.map((s) => ruleForSelector(loaded, s)?.media).filter((c): c is string => !!c),
-    ),
-  ];
+  // Collect chains from ALL rules (not just the first per selector), so
+  // conditional rules are actually evaluated.
+  const allParsedRules = [...loaded.values()].flatMap((s) => s.rules);
+  const media = [...new Set(allParsedRules.map((r) => r.media).filter((c): c is string => !!c))];
   const supports = [
-    ...new Set(
-      selectorList.map((s) => ruleForSelector(loaded, s)?.supports).filter((c): c is string => !!c),
-    ),
+    ...new Set(allParsedRules.map((r) => r.supports).filter((c): c is string => !!c)),
   ];
   const phase3 = await page.evaluate(matchScript, { points: candidatePoints, media, supports });
   const mediaResult = phase3.mediaResult as Record<string, Applies>;
@@ -362,7 +361,7 @@ export async function traceRegions(
   }
   const searchMatches =
     searchSelectorsToRun.length > 0
-      ? await searchSelectors(repoRoot, searchSelectorsToRun)
+      ? await searchSelectors(repoRoot, searchSelectorsToRun, sheetNearPath(loaded, repoRoot))
       : new Map<string, TextMatch[]>();
 
   // Design tokens for patch suggestions (one repo walk).
@@ -396,7 +395,6 @@ export async function traceRegions(
       mediaResult,
       supportsResult,
       searchMatches,
-      repoRoot,
     );
     const matchedRules = collectMatchedRules(
       picked.element,
@@ -432,7 +430,7 @@ export async function traceRegions(
 }
 
 /** Sample points for a region: center + quarter points, clamped to the bbox. */
-function regionSamplePoints(r: DiffRegion): Point[] {
+export function regionSamplePoints(r: Pick<DiffRegion, 'x' | 'y' | 'width' | 'height'>): Point[] {
   const raw = [
     { x: r.x + r.width / 2, y: r.y + r.height / 2 },
     { x: r.x + r.width * 0.2, y: r.y + r.height * 0.2 },
@@ -454,8 +452,8 @@ function regionSamplePoints(r: DiffRegion): Point[] {
 }
 
 /** Choose the element whose rect overlaps the region the most. */
-function pickElement(
-  region: DiffRegion,
+export function pickElement(
+  region: Pick<DiffRegion, 'x' | 'y' | 'width' | 'height'>,
   candidates: Array<CollectedElement | null>,
 ): { element: CollectedElement; pointIndex: number } | null {
   let best: CollectedElement | null = null;
@@ -529,7 +527,6 @@ function buildRegionSource(
   mediaResult: Record<string, Applies>,
   supportsResult: Record<string, Applies>,
   searchMatches: Map<string, TextMatch[]>,
-  repoRoot: string,
 ): RegionSource {
   const elementSelector = el.id
     ? `#${el.id}`
@@ -590,6 +587,9 @@ function searchFallback(
 ): { source: SourceLocation | null; confidence: Confidence } {
   const best = searchMatches.get(selector)?.[0];
   if (!best) return { source: null, confidence: 'low' };
+  // Non-source contexts (tests, docs, generated) are deprioritized: the real
+  // source lives elsewhere, so the match is low-confidence evidence only.
+  const credible = best.context === 'source' || best.context === 'source-css';
   return {
     source: {
       file: best.file,
@@ -597,9 +597,28 @@ function searchFallback(
       column: best.column,
       via: 'text-search',
       gitignored: best.gitignored,
+      context: best.context,
     },
-    confidence: best.gitignored ? 'low' : 'medium',
+    confidence: best.gitignored || !credible ? 'low' : 'medium',
   };
+}
+
+/** Repo-relative path of the first local stylesheet, for search ranking. */
+function sheetNearPath(loaded: Map<number, LoadedSheet>, repoRoot: string): string | undefined {
+  for (const sheet of loaded.values()) {
+    if (sheet.baseUrl?.startsWith('file:')) {
+      try {
+        const abs = fileURLToPath(sheet.baseUrl);
+        const rel = path.relative(repoRoot, abs);
+        if (!rel.startsWith('..') && !path.isAbsolute(rel)) {
+          return rel.split(path.sep).join('/');
+        }
+      } catch {
+        // Keep looking.
+      }
+    }
+  }
+  return undefined;
 }
 
 /** Resolve a rule's source position from ITS OWN offset (no shared counter). */
@@ -640,16 +659,9 @@ function normalizeSourceFile(raw: string, baseUrl: string | null, repoRoot: stri
   return raw;
 }
 
-function ruleForSelector(loaded: Map<number, LoadedSheet>, selector: string): ParsedRule | null {
-  for (const sheet of loaded.values()) {
-    const rule = sheet.rules.find((r) => r.selector === selector);
-    if (rule) return rule;
-  }
-  return null;
-}
-
 async function loadSheet(
   info: SheetInfo,
+  mode: Mode,
 ): Promise<{ text: string; baseUrl: string | null } | null> {
   if (info.inlineText !== null) {
     return { text: info.inlineText, baseUrl: null };
@@ -657,9 +669,11 @@ async function loadSheet(
   if (info.href) {
     try {
       if (info.href.startsWith('file:')) {
+        if (mode === 'hosted') return null; // file:// blocked in hosted mode
         const text = await readFile(fileURLToPath(info.href), 'utf8');
         return { text, baseUrl: info.href };
       }
+      assertTargetAllowed(info.href, mode, 'stylesheet');
       const res = await fetch(info.href, { signal: AbortSignal.timeout(15_000) });
       if (!res.ok) return null;
       return { text: await res.text(), baseUrl: info.href };
@@ -670,7 +684,11 @@ async function loadSheet(
   return null;
 }
 
-async function loadMap(mapUrl: string, baseUrl: string | null): Promise<SourceMapV3 | null> {
+async function loadMap(
+  mapUrl: string,
+  baseUrl: string | null,
+  mode: Mode,
+): Promise<SourceMapV3 | null> {
   try {
     if (mapUrl.startsWith('data:')) {
       const comma = mapUrl.indexOf(',');
@@ -683,9 +701,11 @@ async function loadMap(mapUrl: string, baseUrl: string | null): Promise<SourceMa
     }
     const abs = baseUrl ? new URL(mapUrl, baseUrl) : new URL(mapUrl, 'file:///');
     if (abs.protocol === 'file:') {
+      if (mode === 'hosted') return null; // file:// blocked in hosted mode
       const data = await readFile(fileURLToPath(abs), 'utf8');
       return parseSourceMap(data);
     }
+    assertTargetAllowed(abs.toString(), mode, 'source map');
     const res = await fetch(abs, { signal: AbortSignal.timeout(15_000) });
     if (!res.ok) return null;
     return parseSourceMap(await res.text());
@@ -721,7 +741,7 @@ function parseRules(cssText: string, sheetId: number): ParsedRule[] {
   csstree.walk(ast, {
     enter(node: csstree.CssNode) {
       if (node.type === 'Atrule') {
-        const prelude = node.prelude ? csstree.generate(node.prelude) : '';
+        const prelude = (node.prelude ? csstree.generate(node.prelude) : '').trim();
         if (node.name === 'media') mediaStack.push(prelude);
         else if (node.name === 'supports') supportsStack.push(prelude);
         else if (node.name === 'container') containerStack.push(prelude);
