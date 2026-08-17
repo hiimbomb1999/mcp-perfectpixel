@@ -82,6 +82,12 @@ beforeAll(async () => {
   await writeFile(path.join(dir, 'design.html'), pageHtml('#6d28d9', 'design.css'));
   await writeFile(path.join(dir, 'page.html'), pageHtml('#10b981', 'page.css'));
 
+  // Design tokens the "project" defines — patch suggestions should prefer these.
+  await writeFile(
+    path.join(dir, 'tokens.css'),
+    ':root {\n  --color-success: #16a34a;\n  --color-brand: #2563eb;\n}\n',
+  );
+
   // Render the design fixture with the same deterministic settings as capture.
   designPng = path.join(dir, 'design.png');
   const browser = await chromium.launch({ headless: true, args: LAUNCH_ARGS });
@@ -160,10 +166,38 @@ describe('region source tracing (CSS source maps, then text search, then DOM evi
     expect(button.source!.element.computedStyle['background-color']).toBe('rgb(220, 38, 38)');
   });
 
+  it('suggests minimal patches anchored to the rule source, preferring tokens', () => {
+    const button = regionOf(result, 'button')!;
+    const buttonPatches = button.source!.patches.filter((p) => p.property === 'background-color');
+    expect(buttonPatches).toHaveLength(1);
+    expect(buttonPatches[0]).toMatchObject({
+      file: 'src/_page.scss',
+      line: 5,
+      column: 3,
+      property: 'background-color',
+      current: '#dc2626', // what the page declares
+      suggested: 'var(--color-success)', // token, not a new hardcoded value
+      value: '#16a34a', // what the design image shows
+      confidence: 'high',
+    });
+    expect(buttonPatches[0]!.token).toMatchObject({
+      name: '--color-success',
+      reference: 'var(--color-success)',
+      value: '#16a34a',
+      kind: 'css-variable',
+    });
+
+    const header = regionOf(result, 'header')!;
+    const headerPatches = header.source!.patches.filter((p) => p.property === 'background-color');
+    expect(headerPatches[0]!.suggested).toBe('var(--color-brand)');
+    expect(headerPatches[0]!.current).toBe('#1e40af');
+  });
+
   it('returns DOM evidence with low confidence when nothing resolves', () => {
     const mystery = regionOf(result, 'mystery')!;
     // The mystery span is styled inline — no CSS rule, no text-search match.
     expect(mystery.source!.rules).toEqual([]);
+    expect(mystery.source!.patches).toEqual([]);
     expect(mystery.source!.confidence).toBe('low');
     expect(mystery.source!.element.classes).toContain('mystery');
     expect(mystery.source!.element.computedStyle['background-color']).toBe('rgb(16, 185, 129)');

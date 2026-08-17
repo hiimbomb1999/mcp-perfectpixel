@@ -98,12 +98,12 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
     const screenshotPixels = decodePng(screenshot);
     const analysis = diffImages(designPixels, screenshotPixels, { threshold: diffThreshold });
 
-    // Goal 2: resolve each region to a DOM element and real source location.
-    // Best-effort — tracing failures never fail the capture.
+    // Goal 2+3: resolve each region to a DOM element, real source location, and
+    // minimal patch suggestions. Best-effort — failures never fail the capture.
     let regions = analysis.regions;
     if (trace && regions.length > 0) {
       try {
-        regions = await traceRegions(page, regions, { repoRoot });
+        regions = await traceRegions(page, regions, { repoRoot, design: designPixels });
       } catch {
         // Fall back to untraced regions (source: null) on any tracing error.
       }

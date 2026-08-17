@@ -132,6 +132,55 @@ export interface RegionSource {
   rules: RuleEvidence[];
   /** Highest confidence among rules; 'low' when nothing resolved. */
   confidence: Confidence;
+  /**
+   * Minimal patch suggestions for this region: smallest changes
+   * (file, line, property, current → suggested), preferring tokens the
+   * project already defines. Empty when nothing actionable resolved.
+   */
+  patches: PatchSuggestion[];
+}
+
+export type TokenKind = 'css-variable' | 'tailwind' | 'style-dictionary';
+
+/** A design token the project already defines. */
+export interface DesignToken {
+  /** Token name, e.g. `--color-success` or `colors.success`. */
+  name: string;
+  /** How to reference it in a patch, e.g. `var(--color-success)`. */
+  reference: string;
+  /** Normalized hex value, e.g. `#16a34a`. */
+  value: string;
+  /** Repo-relative path of the file defining it. */
+  file: string;
+  /** 1-based line of the definition. */
+  line: number;
+  kind: TokenKind;
+}
+
+/** A minimal, anchorable single-property change. */
+export interface PatchSuggestion {
+  /** Repo-relative file to change (the rule's source location). */
+  file: string;
+  /** 1-based line. */
+  line: number;
+  /** 1-based column. */
+  column: number;
+  /** The property to change, e.g. `background-color`. */
+  property: string;
+  /** The value currently declared by the rule, e.g. `#dc2626`. */
+  current: string;
+  /**
+   * The minimal suggested replacement: a token reference when the design
+   * color matches a project token, otherwise the hex value derived from the
+   * design image.
+   */
+  suggested: string;
+  /** The normalized hex color the design image shows at the region. */
+  value: string;
+  /** The matched token, when one was preferred over a hardcoded value. */
+  token: DesignToken | null;
+  /** Inherited from the rule's source confidence. */
+  confidence: Confidence;
 }
 
 export interface CaptureInfo {

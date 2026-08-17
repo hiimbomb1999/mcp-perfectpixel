@@ -40,6 +40,8 @@ import {
   type SourceMapV3,
 } from './sourcemap.js';
 import { searchSelectors, type TextMatch } from './search.js';
+import { buildPatches, findDesignTokens } from './patches.js';
+import type { RgbaImage } from './types.js';
 
 /** Visually relevant properties snapshotted on the region's element. */
 const VISUAL_PROPS: readonly string[] = [
@@ -136,6 +138,8 @@ interface LoadedSheet {
 
 export interface TraceOptions {
   repoRoot: string;
+  /** The (viewport-sized) design raster, for pixel-derived patch suggestions. */
+  design: RgbaImage;
 }
 
 /**
@@ -269,23 +273,26 @@ export async function traceRegions(
     return offsets[Math.min(idx, offsets.length - 1)] ?? null;
   };
 
+  // Design tokens for patch suggestions (one repo walk).
+  const tokens = await findDesignTokens(repoRoot);
+
   return regions.map((region, i) => {
     const el = elements[i];
     const selMatches = phase3.perPoint[i];
     const chainMatches = phase3.chainMatches as Record<string, boolean>;
     if (!el || !selMatches) return { ...region, source: null };
-    return {
-      ...region,
-      source: buildRegionSource(
-        el,
-        loaded,
-        selMatches,
-        chainMatches,
-        takeOffset,
-        searchMatches,
-        repoRoot,
-      ),
-    };
+    const source = buildRegionSource(
+      el,
+      loaded,
+      selMatches,
+      chainMatches,
+      takeOffset,
+      searchMatches,
+      repoRoot,
+    );
+    // Goal 3: minimal patch suggestions, preferring project tokens.
+    source.patches = buildPatches(options.design, region, source.rules, tokens);
+    return { ...region, source };
   });
 }
 
@@ -382,6 +389,7 @@ function buildRegionSource(
     },
     rules,
     confidence,
+    patches: [],
   };
 }
 

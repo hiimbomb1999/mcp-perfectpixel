@@ -15,11 +15,11 @@ DeepSeek Agent), which already reads the full repo and understands its own
 conventions — this is what makes the tool work on any language or framework
 without per-framework parsers.
 
-> **Status:** Goals 1–2 are implemented and tested: deterministic capture +
-> pixel diff with grouped severity-scored regions, and tracing each region to
-> its DOM element + real source location (CSS source maps, then gitignore-aware
-> text search, with confidence scoring). Minimal patch output is the next
-> milestone — see [Roadmap](#roadmap).
+> **Status:** Goals 1–3 are implemented and tested: deterministic capture +
+> pixel diff with grouped severity-scored regions, tracing each region to its
+> DOM element + real source location (CSS source maps, then gitignore-aware
+> text search, with confidence scoring), and minimal patch suggestions that
+> prefer the project's own design tokens — see [Roadmap](#roadmap).
 
 ## Features
 
@@ -153,7 +153,27 @@ Example result (abridged):
             "confidence": "high"
           }
         ],
-        "confidence": "high"
+        "confidence": "high",
+        "patches": [
+          {
+            "file": "src/styles/_buttons.scss",
+            "line": 42,
+            "column": 5,
+            "property": "background-color",
+            "current": "#dc2626",
+            "suggested": "var(--color-success)",
+            "value": "#16a34a",
+            "token": {
+              "name": "--color-success",
+              "reference": "var(--color-success)",
+              "value": "#16a34a",
+              "file": "src/styles/tokens.css",
+              "line": 12,
+              "kind": "css-variable"
+            },
+            "confidence": "high"
+          }
+        ]
       }
     }
   ],
@@ -209,6 +229,36 @@ agent (Claude Code, Cursor, ...) reads the repo and maps `file:line:column`
 hints to its own framework's conventions. Universal selectors (`*`,
 `*::before`) are filtered out as non-region-specific noise.
 
+## Minimal patches
+
+For every traced rule that declares a color-ish property, the server derives the
+design's intended value by sampling the design image at the region (dominant
+opaque color), and emits the smallest possible change:
+
+```json
+{
+  "file": "src/styles/_buttons.scss",
+  "line": 42,
+  "column": 5,
+  "property": "background-color",
+  "current": "#dc2626",
+  "suggested": "var(--color-success)",
+  "value": "#16a34a",
+  "token": { "name": "--color-success", "kind": "css-variable", ... },
+  "confidence": "high"
+}
+```
+
+Token preference: the server scans `repoRoot` for design tokens the project
+already defines — **CSS custom properties** (`--x: #hex;` in `.css`/`.scss`/
+`.less`), **Tailwind configs** (`tailwind.config.{js,ts}` colors), and
+**style-dictionary JSON** (`"color.success": { "value": "#16a34a" }`) — and
+suggests the token reference (`var(--color-success)`) instead of a new hardcoded
+value when the design color matches one. Patches are only emitted when the rule
+has an anchorable source location and the declared value actually differs from
+the design; layout geometry is left to the agent's judgment. The server never
+proposes component rewrites — the output is always a single-property change.
+
 ## Design philosophy
 
 - **Structured evidence, not framework knowledge.** The MCP server's job ends at
@@ -226,11 +276,11 @@ hints to its own framework's conventions. Universal selectors (`*`,
 - [x] **Goal 1 — Deterministic capture + pixel diff**
 - [x] **Goal 2 — Trace diffs to real source** — CSS source maps first, then
       gitignore-aware text search, with confidence scoring — never a guess.
-- [ ] **Goal 3 — Minimal patch output** — smallest change (file, line, property,
+- [x] **Goal 3 — Minimal patch output** — smallest change (file, line, property,
       current → suggested), preferring tokens the project already defines.
-- [ ] **Goal 4 — Adapter packages** for specific frameworks behind the shared
-      core interface (only if source-map + grep ever proves insufficient).
-- [ ] **Goal 5 — OSS conventions** — publish `mcp-perfectpixel` on tag with
+- [x] **Goal 4 — Structured context hand-off** — the server stops at accurate
+      signals; framework understanding stays with the calling agent.
+- [ ] **Goal 5 — First public release** — publish `mcp-perfectpixel` on tag with
       semver from `v0.1.0`.
 
 ## Development

@@ -47,6 +47,15 @@ interface CaptureResult {
         confidence: string;
       }>;
       confidence: string;
+      patches: Array<{
+        file: string;
+        line: number;
+        column: number;
+        property: string;
+        current: string;
+        suggested: string;
+        value: string;
+      }>;
     } | null;
   }>;
   capture: {
@@ -180,6 +189,13 @@ describe('mcp-perfectpixel e2e (stdio -> server -> capture -> diff)', () => {
     // itself or any source file containing the selector).
     expect(buttonRule!.source!.line).toBeGreaterThan(0);
     expect(buttonRule!.source!.file).not.toMatch(/^\.\.\//);
+
+    // Minimal patch: design-derived color, no tokens in this repo -> raw hex.
+    // The fixture rule declares the `background` shorthand.
+    const buttonPatch = button!.source!.patches.find((p) => p.property === 'background');
+    expect(buttonPatch).toBeDefined();
+    expect(buttonPatch!.current).toBe('#dc2626');
+    expect(buttonPatch!.suggested).toBe('#16a34a');
 
     // Deterministic capture claims.
     expect(result.capture.locale).toBe('en-US');

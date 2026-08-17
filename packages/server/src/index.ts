@@ -29,7 +29,11 @@ server.tool(
     'DOM element and real source location: CSS source maps first, then a ' +
     'gitignore-aware text search of repoRoot (medium confidence; matches in ' +
     'gitignored files are flagged as build output), or plain DOM/computed-style ' +
-    'evidence with low confidence when nothing resolves.',
+    'evidence with low confidence when nothing resolves. Each region also carries ' +
+    'minimal patch suggestions (file, line, property, current -> suggested) derived ' +
+    'from the design image pixels, preferring design tokens the project already ' +
+    'defines (CSS custom properties, Tailwind config, style-dictionary) over new ' +
+    'hardcoded values — never full component rewrites.',
   {
     url: urlSchema.describe('Live URL to screenshot — http(s) or file URL.'),
     designImagePath: z
