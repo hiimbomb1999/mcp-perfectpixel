@@ -1,5 +1,9 @@
 # mcp-perfectpixel
 
+[![npm version](https://img.shields.io/npm/v/mcp-perfectpixel.svg)](https://www.npmjs.com/package/mcp-perfectpixel)
+[![CI](https://github.com/hiimbomb1999/mcp-perfectpixel/actions/workflows/ci.yml/badge.svg)](https://github.com/hiimbomb1999/mcp-perfectpixel/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/hiimbomb1999/mcp-perfectpixel/blob/main/LICENSE)
+
 > **The missing verification layer for AI design-to-code workflows.**
 
 `mcp-perfectpixel` is an [MCP](https://modelcontextprotocol.io) server that

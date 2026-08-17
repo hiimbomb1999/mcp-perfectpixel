@@ -3,6 +3,16 @@
   "version": "0.1.0",
   "description": "Deterministic capture + pixel-diff engine for mcp-perfectpixel: screenshots a URL and diffs it against a static design image, returning grouped diff regions with severity scores.",
   "license": "MIT",
+  "author": "Danh Huynh (https://github.com/hiimbomb1999)",
+  "homepage": "https://github.com/hiimbomb1999/mcp-perfectpixel#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hiimbomb1999/mcp-perfectpixel.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/hiimbomb1999/mcp-perfectpixel/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=20"

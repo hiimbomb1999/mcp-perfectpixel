@@ -4,6 +4,15 @@
   "private": true,
   "description": "Monorepo for mcp-perfectpixel — a codebase-grounded design-to-code diff server for the Model Context Protocol",
   "license": "MIT",
+  "author": "Danh Huynh (https://github.com/hiimbomb1999)",
+  "homepage": "https://github.com/hiimbomb1999/mcp-perfectpixel#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hiimbomb1999/mcp-perfectpixel.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hiimbomb1999/mcp-perfectpixel/issues"
+  },
   "packageManager": "pnpm@10.33.2",
   "engines": {
     "node": ">=20"
