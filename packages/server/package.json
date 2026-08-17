@@ -1,0 +1,50 @@
+{
+  "name": "mcp-perfectpixel",
+  "version": "0.1.0",
+  "description": "MCP server that screenshots a live URL and diffs it against a static design image (PNG/JPG), returning grouped diff regions with severity scores. Deterministic capture: animations disabled, fonts fully loaded, fixed locale/timezone.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "mcp-perfectpixel": "dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/index.js"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "visual-regression",
+    "pixel-diff",
+    "design-to-code",
+    "screenshot",
+    "playwright",
+    "pixelmatch",
+    "claude",
+    "cursor"
+  ],
+  "dependencies": {
+    "@mcp-perfectpixel/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>page</title>
+    <style>
+      /* Same layout as design.html; only colors differ:
+       header #2563EB -> #1E40AF (medium severity), button #16A34A -> #DC2626 (high severity) */
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+      }
+      body {
+        background: #f8fafc;
+      }
+      .header {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 800px;
+        height: 80px;
+        background: #1e40af;
+      }
+      .card {
+        position: absolute;
+        top: 120px;
+        left: 50px;
+        width: 200px;
+        height: 120px;
+        background: #ffffff;
+        border: 2px solid #e2e8f0;
+      }
+      .button {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        width: 120px;
+        height: 36px;
+        background: #dc2626;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header"></div>
+    <div class="card"><div class="button"></div></div>
+  </body>
+</html>

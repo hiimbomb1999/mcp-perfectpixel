@@ -1,0 +1,34 @@
+{
+  "name": "@mcp-perfectpixel/core",
+  "version": "0.1.0",
+  "description": "Deterministic capture + pixel-diff engine for mcp-perfectpixel: screenshots a URL and diffs it against a static design image, returning grouped diff regions with severity scores.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "jpeg-js": "^0.4.4",
+    "pixelmatch": "^7.1.0",
+    "playwright": "^1.49.0",
+    "pngjs": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/pngjs": "^6.0.5"
+  }
+}
