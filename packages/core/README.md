@@ -1,7 +1,7 @@
 # @mcp-perfectpixel/core
 
 Framework-agnostic capture + pixel-diff engine behind
-[`mcp-perfectpixel`](https://github.com/your-org/mcp-perfectpixel#readme).
+[`mcp-perfectpixel`](https://github.com/hiimbomb1999/mcp-perfectpixel#readme).
 
 - Deterministic Playwright capture (fixed locale/timezone, reduced motion,
   animations disabled, fonts awaited).
@@ -13,8 +13,7 @@ Framework-agnostic capture + pixel-diff engine behind
   tokens the project already defines (CSS custom properties, Tailwind config,
   style-dictionary JSON).
 
-No MCP dependency — reuse the engine for other tooling. _(Update the repository
-link before the first release.)_
+No MCP dependency — reuse the engine for other tooling.
 
 ## License
 

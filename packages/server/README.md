@@ -53,9 +53,8 @@ Returns `status`, `similarity`, grouped `regions` (each with severity, DOM
 element, matched CSS rules + source locations + confidence, and minimal
 `patches`), capture determinism info, and artifact paths.
 
-See the repository [README](https://github.com/your-org/mcp-perfectpixel#readme)
-for the full tool reference, source-tracing design, and roadmap. _(Update the
-repository link before the first release.)_
+See the repository [README](https://github.com/hiimbomb1999/mcp-perfectpixel#readme)
+for the full tool reference, source-tracing design, and roadmap.
 
 ## License
 
