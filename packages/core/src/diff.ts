@@ -79,7 +79,7 @@ export function diffImages(
     .filter((pixels) => pixels.length >= minRegionPixels)
     .map((pixels) => summarizeRegion(pixels, deltas, width, height))
     .sort((a, b) => b.score - a.score || b.pixelCount - a.pixelCount)
-    .map((region, i) => ({ ...region, id: i + 1 }));
+    .map((region, i) => ({ ...region, id: i + 1, source: null }));
 
   const diffRatio = total === 0 ? 0 : diffPixelCount / total;
   return { diffPixelCount, totalPixelCount: total, diffRatio, diffImage, regions };
@@ -207,7 +207,7 @@ function summarizeRegion(
   deltas: Float32Array,
   width: number,
   height: number,
-): Omit<DiffRegion, 'id'> {
+): Omit<DiffRegion, 'id' | 'source'> {
   let x1 = Infinity,
     y1 = Infinity,
     x2 = -1,

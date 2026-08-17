@@ -32,6 +32,22 @@ interface CaptureResult {
     pixelCount: number;
     severity: string;
     score: number;
+    source: {
+      element: { tag: string; classes: string[]; computedStyle: Record<string, string> };
+      rules: Array<{
+        selector: string;
+        properties: string[];
+        source: {
+          file: string;
+          line: number;
+          column: number;
+          via: string;
+          gitignored: boolean;
+        } | null;
+        confidence: string;
+      }>;
+      confidence: string;
+    } | null;
   }>;
   capture: {
     locale: string;
@@ -149,6 +165,21 @@ describe('mcp-perfectpixel e2e (stdio -> server -> capture -> diff)', () => {
     expect(header!.severity).toBe('medium');
     expect(header!.width).toBeGreaterThan(790);
     expect(header!.height).toBeGreaterThan(70);
+
+    // Source tracing through the MCP server: the fixture pages have no source
+    // maps, so the .button rule resolves via gitignore-aware text search
+    // against the server cwd (the repo root) -> medium confidence.
+    expect(button!.source).not.toBeNull();
+    expect(button!.source!.element.classes).toContain('button');
+    const buttonRule = button!.source!.rules.find((r) => r.selector === '.button');
+    expect(buttonRule).toBeDefined();
+    expect(buttonRule!.confidence).toBe('medium');
+    expect(buttonRule!.source!.via).toBe('text-search');
+    expect(buttonRule!.source!.gitignored).toBe(false);
+    // The match is in a non-ignored file of the repo (could be the fixture
+    // itself or any source file containing the selector).
+    expect(buttonRule!.source!.line).toBeGreaterThan(0);
+    expect(buttonRule!.source!.file).not.toMatch(/^\.\.\//);
 
     // Deterministic capture claims.
     expect(result.capture.locale).toBe('en-US');

@@ -29,6 +29,17 @@ export interface CaptureOptions {
   matchThreshold?: number;
   /** Milliseconds to wait for the page to load. Default 30_000. */
   navigationTimeoutMs?: number;
+  /**
+   * Root of the codebase to search for source locations (text-search fallback,
+   * gitignore-aware). Defaults to `process.cwd()`.
+   */
+  repoRoot?: string;
+  /**
+   * Resolve each diff region to a DOM element and a best-effort source
+   * location (CSS source maps first, then gitignore-aware text search).
+   * Default true.
+   */
+  trace?: boolean;
 }
 
 export type Severity = 'high' | 'medium' | 'low';
@@ -60,6 +71,67 @@ export interface DiffRegion {
    */
   score: number;
   severity: Severity;
+  /**
+   * Best-effort source resolution for this region: the DOM element at the
+   * region and the CSS rules (with source locations) that style it.
+   * `null` when tracing is disabled or the region has no element.
+   */
+  source: RegionSource | null;
+}
+
+/** How confident we are that a source location is the real origin. */
+export type Confidence = 'high' | 'medium' | 'low';
+
+export interface SourceLocation {
+  /** Path relative to repoRoot. */
+  file: string;
+  /** 1-based line. */
+  line: number;
+  /** 1-based column. */
+  column: number;
+  /** How the location was resolved. */
+  via: 'source-map' | 'text-search';
+  /** True when the file is gitignored (e.g. compiled/build output). */
+  gitignored: boolean;
+}
+
+/** The DOM element sitting at a diff region. */
+export interface ElementEvidence {
+  tag: string;
+  id: string | null;
+  classes: string[];
+  /** Best-effort selector derived from id/classes/tag. */
+  selector: string;
+  /** Computed values of visually relevant properties. */
+  computedStyle: Record<string, string>;
+}
+
+/** One CSS rule that matched the region's element. */
+export interface RuleEvidence {
+  selector: string;
+  /** Media/container condition chain, e.g. "(max-width: 600px)". Null when unconditional. */
+  media: string | null;
+  /** Whether the rule's media conditions currently apply. */
+  applies: boolean;
+  /** Visually relevant properties this rule declares. */
+  properties: string[];
+  /** The rule's declared values for those properties. */
+  declared: Record<string, string>;
+  /**
+   * Original source location: from a CSS source map (high confidence), or a
+   * gitignore-aware text search for the selector (medium/low). Null when
+   * nothing was found — the DOM/computed-style evidence is then the only signal.
+   */
+  source: SourceLocation | null;
+  confidence: Confidence;
+}
+
+/** Per-region tracing result. */
+export interface RegionSource {
+  element: ElementEvidence;
+  rules: RuleEvidence[];
+  /** Highest confidence among rules; 'low' when nothing resolved. */
+  confidence: Confidence;
 }
 
 export interface CaptureInfo {
@@ -94,4 +166,6 @@ export interface DiffResult {
   regions: DiffRegion[];
   capture: CaptureInfo;
   artifacts: DiffArtifacts;
+  /** Codebase root used for source tracing (resolved absolute path). */
+  repoRoot: string;
 }

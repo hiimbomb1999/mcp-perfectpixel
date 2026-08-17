@@ -25,7 +25,11 @@ server.tool(
     'scores and bounding boxes, plus the overall similarity. The screenshot and a highlighted ' +
     'diff image are written to outputDir (default: a fresh temp dir). ' +
     'Use the returned regions as structured evidence for a design-to-code fix — the calling ' +
-    'agent owns mapping regions to source code.',
+    'agent owns mapping regions to source code. Each region is also traced to its ' +
+    'DOM element and real source location: CSS source maps first, then a ' +
+    'gitignore-aware text search of repoRoot (medium confidence; matches in ' +
+    'gitignored files are flagged as build output), or plain DOM/computed-style ' +
+    'evidence with low confidence when nothing resolves.',
   {
     url: urlSchema.describe('Live URL to screenshot — http(s) or file URL.'),
     designImagePath: z
@@ -62,6 +66,13 @@ server.tool(
       .max(1)
       .optional()
       .describe('pixelmatch threshold — smaller is more sensitive. Default 0.1.'),
+    repoRoot: z
+      .string()
+      .optional()
+      .describe(
+        'Root of the codebase to search for source locations (gitignore-aware text search). ' +
+          'Defaults to the server working directory. CSS source maps resolve independently of this.',
+      ),
   },
   async (args) => {
     try {
@@ -73,6 +84,7 @@ server.tool(
         waitForSelector: args.waitForSelector,
         waitMs: args.waitMs,
         diffThreshold: args.diffThreshold,
+        repoRoot: args.repoRoot,
       });
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],

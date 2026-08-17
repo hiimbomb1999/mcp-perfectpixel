@@ -36,14 +36,25 @@ stdio, so always build before testing — `pnpm test` does this for you.
 
 - `packages/core/test/diff.test.ts` — synthetic-buffer unit tests for diffing,
   region grouping, merging, severity buckets, resize, and image decoding.
+- `packages/core/test/sourcemap.test.ts` — source-map v3 unit tests: base64 VLQ
+  decode, `mappings` decoding, generated-offset → original-position lookup, and
+  `sourceMappingURL` extraction.
+- `packages/core/test/search.test.ts` — gitignore-aware search unit tests:
+  nested/negated `.gitignore` patterns, non-ignored-vs-gitignored ranking, and
+  node_modules exclusion.
 - `packages/server/test/e2e.test.ts` — full-stack test: an MCP client calls
   `capture_and_diff` on the real server against a deterministic fixture page,
-  asserting region geometry/severity, the pixel-identical match case, and
-  byte-identical re-captures.
+  asserting region geometry/severity, source tracing via text search, the
+  pixel-identical match case, and byte-identical re-captures.
+- `packages/server/test/trace.e2e.test.ts` — source-tracing e2e: a generated
+  page whose compiled CSS carries a `data:` source map (VLQ-encoded in the
+  test) resolves rules to `src/_page.scss:line:column` with high confidence;
+  an inline-styled element resolves to DOM evidence with low confidence.
 
 Add fixtures as plain static HTML under `packages/server/test/fixtures/` — keep
 them free of text and external assets so rendering stays deterministic across
-machines.
+machines. The tracing e2e generates its own HTML/CSS/source-map into a temp dir,
+so no binary artifacts are committed.
 
 ## Commit & PR conventions
 

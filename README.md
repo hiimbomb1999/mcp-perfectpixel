@@ -15,9 +15,11 @@ DeepSeek Agent), which already reads the full repo and understands its own
 conventions — this is what makes the tool work on any language or framework
 without per-framework parsers.
 
-> **Status:** Goal 1 (deterministic capture + pixel diff) is implemented and
-> tested. Source-tracing (CSS source maps + ripgrep) and minimal patch output are
-> planned milestones — see [Roadmap](#roadmap).
+> **Status:** Goals 1–2 are implemented and tested: deterministic capture +
+> pixel diff with grouped severity-scored regions, and tracing each region to
+> its DOM element + real source location (CSS source maps, then gitignore-aware
+> text search, with confidence scoring). Minimal patch output is the next
+> milestone — see [Roadmap](#roadmap).
 
 ## Features
 
@@ -29,6 +31,10 @@ without per-framework parsers.
   nearby clusters merged, so you get "the button is wrong", not 4,000 scattered
   pixels. Each region carries a bounding box, pixel count, mean/max color delta,
   and a composite **severity score** (`high` / `medium` / `low`).
+- **Region → source tracing** — every region is resolved to its DOM element
+  (tag/id/classes, computed style) and the CSS rules styling it, each with a
+  best-effort original source location and a **confidence score** (`high` /
+  `medium` / `low`) — see [Source tracing](#source-tracing).
 - **Overall similarity** — `1 - diffRatio` plus a `match` / `diff` status with a
   configurable tolerance.
 - **Artifacts on disk** — the screenshot and a highlighted diff image (PNG) are
@@ -88,15 +94,16 @@ pnpm --filter mcp-perfectpixel start
 
 Screenshots `url`, diffs it against `designImagePath`, returns regions + artifacts.
 
-| Argument          | Type                | Description                                                      |
-| ----------------- | ------------------- | ---------------------------------------------------------------- |
-| `url`             | `string` (required) | Live URL to screenshot — `http(s)` or `file` URL.                |
-| `designImagePath` | `string` (required) | Path to the static design image (`.png`, `.jpg`, `.jpeg`).       |
-| `viewport`        | `{width, height}`   | CSS-pixel viewport. Defaults to the design image's dimensions.   |
-| `outputDir`       | `string`            | Where to write artifacts. Defaults to a fresh temp dir.          |
-| `waitForSelector` | `string`            | CSS selector to wait for before screenshotting.                  |
-| `waitMs`          | `number`            | Extra settle time after load, in ms.                             |
-| `diffThreshold`   | `number` (0–1)      | pixelmatch sensitivity. Smaller = more sensitive. Default `0.1`. |
+| Argument          | Type                | Description                                                                          |
+| ----------------- | ------------------- | ------------------------------------------------------------------------------------ |
+| `url`             | `string` (required) | Live URL to screenshot — `http(s)` or `file` URL.                                    |
+| `designImagePath` | `string` (required) | Path to the static design image (`.png`, `.jpg`, `.jpeg`).                           |
+| `viewport`        | `{width, height}`   | CSS-pixel viewport. Defaults to the design image's dimensions.                       |
+| `outputDir`       | `string`            | Where to write artifacts. Defaults to a fresh temp dir.                              |
+| `waitForSelector` | `string`            | CSS selector to wait for before screenshotting.                                      |
+| `waitMs`          | `number`            | Extra settle time after load, in ms.                                                 |
+| `diffThreshold`   | `number` (0–1)      | pixelmatch sensitivity. Smaller = more sensitive. Default `0.1`.                     |
+| `repoRoot`        | `string`            | Codebase root for source tracing (text-search fallback). Defaults to the server cwd. |
 
 Example result (abridged):
 
@@ -120,7 +127,34 @@ Example result (abridged):
       "meanDelta": 0.52,
       "maxDelta": 0.83,
       "score": 0.58,
-      "severity": "high"
+      "severity": "high",
+      "source": {
+        "element": {
+          "tag": "button",
+          "id": null,
+          "classes": ["btn-primary"],
+          "selector": "button.btn-primary",
+          "computedStyle": { "background-color": "rgb(220, 38, 38)", "color": "rgb(255, 255, 255)" }
+        },
+        "rules": [
+          {
+            "selector": ".btn-primary",
+            "media": null,
+            "applies": true,
+            "properties": ["background-color"],
+            "declared": { "background-color": "#dc2626" },
+            "source": {
+              "file": "src/styles/_buttons.scss",
+              "line": 42,
+              "column": 5,
+              "via": "source-map",
+              "gitignored": false
+            },
+            "confidence": "high"
+          }
+        ],
+        "confidence": "high"
+      }
     }
   ],
   "capture": {
@@ -138,7 +172,8 @@ Example result (abridged):
     "screenshotPath": "/var/folders/.../example.com-screenshot.png",
     "diffImagePath": "/var/folders/.../example.com-diff.png",
     "designImagePath": "/repo/designs/home.png"
-  }
+  },
+  "repoRoot": "/repo"
 }
 ```
 
@@ -147,6 +182,32 @@ with `high ≥ 0.5`, `medium ≥ 0.2`, `low < 0.2`. `meanDelta` is the mean per-
 perceptual color delta (YIQ-weighted, normalized 0–1), `coverage` is the fraction
 of the region's bounding box that actually differs, and `areaRatio` is the
 region's share of the viewport.
+
+## Source tracing
+
+Each diff region is resolved to a DOM element and the CSS rules styling it, and
+each rule gets a best-effort original source location, in this order:
+
+1. **CSS source maps** — the standard, build-tool-agnostic mechanism (Sass,
+   Less, PostCSS, Tailwind, Webpack, Vite all emit them). The server reads each
+   stylesheet's text, parses it (css-tree), maps each rule's byte offset through
+   the source map, and returns the original `file:line:column` →
+   `confidence: "high"`. This works regardless of what templating language
+   generated the HTML, because it operates at the compiled-CSS layer.
+2. **Gitignore-aware text search** — the rule's selector is searched across
+   `repoRoot` with gitignore semantics (ripgrep-style: nested `.gitignore`s and
+   negations respected, `node_modules` never searched). A match in a
+   non-ignored file → `confidence: "medium"`; a match only in gitignored paths
+   (compiled/build output) is reported but flagged `gitignored: true` and
+   deprioritized → `confidence: "low"`.
+3. **DOM/computed-style evidence only** — if nothing resolves, the element
+   evidence is returned as-is with `confidence: "low"`. The server never guesses
+   a file.
+
+The server deliberately stops at accurate, structured signals — the calling
+agent (Claude Code, Cursor, ...) reads the repo and maps `file:line:column`
+hints to its own framework's conventions. Universal selectors (`*`,
+`*::before`) are filtered out as non-region-specific noise.
 
 ## Design philosophy
 
@@ -162,10 +223,9 @@ region's share of the viewport.
 
 ## Roadmap
 
-- [x] **Goal 1 — Deterministic capture + pixel diff** (this release)
-- [ ] **Goal 2 — Trace diffs to real source** via CSS source maps first, then
-      ripgrep text search (`.gitignore`-aware), with confidence scoring — never a
-      guess.
+- [x] **Goal 1 — Deterministic capture + pixel diff**
+- [x] **Goal 2 — Trace diffs to real source** — CSS source maps first, then
+      gitignore-aware text search, with confidence scoring — never a guess.
 - [ ] **Goal 3 — Minimal patch output** — smallest change (file, line, property,
       current → suggested), preferring tokens the project already defines.
 - [ ] **Goal 4 — Adapter packages** for specific frameworks behind the shared

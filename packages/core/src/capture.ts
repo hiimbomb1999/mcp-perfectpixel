@@ -6,6 +6,7 @@ import { chromium } from 'playwright';
 import { PNG } from 'pngjs';
 import { decodeImage, decodePng, resizeRgba } from './pixels.js';
 import { diffImages } from './diff.js';
+import { traceRegions } from './trace.js';
 import type { CaptureOptions, DiffResult, RgbaImage } from './types.js';
 
 /**
@@ -49,6 +50,8 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
     matchThreshold = 0.001,
     navigationTimeoutMs = 30_000,
   } = options;
+  const repoRoot = path.resolve(options.repoRoot ?? process.cwd());
+  const trace = options.trace ?? true;
 
   const design = await decodeImage(designImagePath);
   const viewport = options.viewport ?? { width: design.width, height: design.height };
@@ -95,6 +98,17 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
     const screenshotPixels = decodePng(screenshot);
     const analysis = diffImages(designPixels, screenshotPixels, { threshold: diffThreshold });
 
+    // Goal 2: resolve each region to a DOM element and real source location.
+    // Best-effort — tracing failures never fail the capture.
+    let regions = analysis.regions;
+    if (trace && regions.length > 0) {
+      try {
+        regions = await traceRegions(page, regions, { repoRoot });
+      } catch {
+        // Fall back to untraced regions (source: null) on any tracing error.
+      }
+    }
+
     const baseName = sanitize(url);
     const screenshotPath = path.join(outDir, `${baseName}-screenshot.png`);
     const diffImagePath = path.join(outDir, `${baseName}-diff.png`);
@@ -107,7 +121,7 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
       diffPixelCount: analysis.diffPixelCount,
       totalPixelCount: analysis.totalPixelCount,
       diffRatio: analysis.diffRatio,
-      regions: analysis.regions,
+      regions,
       capture: {
         url,
         viewport: { width: viewport.width, height: viewport.height },
@@ -124,6 +138,7 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
         diffImagePath,
         designImagePath: path.resolve(designImagePath),
       },
+      repoRoot,
     };
   } finally {
     await browser.close();
