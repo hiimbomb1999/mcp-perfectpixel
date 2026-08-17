@@ -30,14 +30,25 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Verify tag matches package version
+      - name: Verify tag matches package versions
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
-          PKG_VERSION="$(node -p "require('./packages/server/package.json').version")"
-          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
-            echo "Tag v$TAG_VERSION does not match package version $PKG_VERSION" >&2
-            exit 1
-          fi
+          for pkg in packages/core packages/server; do
+            PKG_VERSION="$(node -p "require('./$pkg/package.json').version")"
+            if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+              echo "Tag v$TAG_VERSION does not match $pkg version $PKG_VERSION" >&2
+              exit 1
+            fi
+          done
+
+      # Core must publish first: the server tarball depends on
+      # @mcp-perfectpixel/core@<version> (workspace:* is rewritten on pack).
+      - name: Publish @mcp-perfectpixel/core
+        run: |
+          echo "//registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN" > .npmrc
+          pnpm --filter @mcp-perfectpixel/core publish --access public --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish mcp-perfectpixel
         run: |

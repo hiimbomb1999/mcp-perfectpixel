@@ -80,14 +80,25 @@ that proves it (templated-looking fixtures are welcome).
 
 ## Releasing
 
-Releases are cut by pushing a tag (see `.github/workflows/publish.yml`):
+Releases are cut by pushing a tag (see `.github/workflows/publish.yml`). Both
+packages must stay on the same semver:
 
 ```bash
-pnpm -C packages/server version 0.1.1   # bumps and tags
+pnpm -r version 0.1.1          # bumps core + server and tags both
 git push --follow-tags
 ```
 
-The workflow verifies the tag matches the package version, then publishes
-`mcp-perfectpixel` to npm. The `NPM_TOKEN` secret must be configured in the repo
-for the publish step. The package name is a placeholder — verify it is still
-unclaimed on npm/GitHub before the first real release.
+The workflow verifies the tag matches **both** package versions, then publishes
+`@mcp-perfectpixel/core` first and `mcp-perfectpixel` second (the server
+tarball depends on the core version, `workspace:*` is rewritten on pack). The
+`NPM_TOKEN` secret must be configured in the repo for the publish steps.
+
+Before the first real release:
+
+- verify `mcp-perfectpixel` is still unclaimed on npm and pick a GitHub home
+  (update the `repository`/`homepage` links in both package.json files and the
+  package READMEs);
+- sanity-check the tarballs with `pnpm --filter <pkg> pack` (dist + README +
+  LICENSE included, shebang intact, core dep rewritten to a concrete version);
+- confirm the `playwright install chromium` step documented in the README works
+  for consumers (the server needs a browser at capture time).

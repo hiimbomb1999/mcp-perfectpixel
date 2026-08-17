@@ -15,11 +15,13 @@ DeepSeek Agent), which already reads the full repo and understands its own
 conventions — this is what makes the tool work on any language or framework
 without per-framework parsers.
 
-> **Status:** Goals 1–3 are implemented and tested: deterministic capture +
+> **Status:** Goals 1–5 are implemented and tested: deterministic capture +
 > pixel diff with grouped severity-scored regions, tracing each region to its
 > DOM element + real source location (CSS source maps, then gitignore-aware
-> text search, with confidence scoring), and minimal patch suggestions that
-> prefer the project's own design tokens — see [Roadmap](#roadmap).
+> text search, with confidence scoring), minimal patch suggestions that prefer
+> the project's own design tokens, the structured-context boundary, and the
+> full OSS/release pipeline. The first npm publish happens when a `v0.1.0` tag
+> is pushed with the `NPM_TOKEN` secret configured — see [Roadmap](#roadmap).
 
 ## Features
 
@@ -46,8 +48,14 @@ without per-framework parsers.
 
 ## Install & run
 
-Requires **Node.js ≥ 20** and a Chromium binary (installed automatically the first
-time via Playwright; you can also point Playwright at system Chrome).
+Requires **Node.js ≥ 20** and a Chromium binary. The browser is **not**
+downloaded automatically — install it once with:
+
+```bash
+npx playwright install chromium
+```
+
+(If it's missing, the server returns a clear error pointing at this command.)
 
 ### Claude Desktop
 
@@ -298,8 +306,10 @@ conventions. Concretely, the server never:
       current → suggested), preferring tokens the project already defines.
 - [x] **Goal 4 — Structured context hand-off** — the server stops at accurate
       signals; framework understanding stays with the calling agent.
-- [ ] **Goal 5 — First public release** — publish `mcp-perfectpixel` on tag with
-      semver from `v0.1.0`.
+- [x] **Goal 5 — OSS conventions + release pipeline** — MIT, configs for Claude
+      Desktop/Cursor, CONTRIBUTING, CI, publish-on-tag for both packages, semver
+      from `v0.1.0`, discovery keywords. The first real release just needs an
+      `NPM_TOKEN` secret and a `v0.1.0` tag (see CONTRIBUTING).
 
 ## Development
 

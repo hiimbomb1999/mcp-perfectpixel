@@ -18,6 +18,19 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "mcp",
+    "visual-regression",
+    "pixel-diff",
+    "design-to-code",
+    "screenshot",
+    "playwright",
+    "pixelmatch",
+    "source-map"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"

@@ -70,7 +70,16 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
   await mkdir(outDir, { recursive: true });
 
   const started = performance.now();
-  const browser = await chromium.launch({ headless: true, args: LAUNCH_ARGS });
+  let browser: Awaited<ReturnType<typeof chromium.launch>>;
+  try {
+    browser = await chromium.launch({ headless: true, args: LAUNCH_ARGS });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Could not launch Chromium: ${message}\n` +
+        'Install the browser binary with: npx playwright install chromium',
+    );
+  }
   try {
     const context = await browser.newContext({
       viewport: { width: viewport.width, height: viewport.height },
