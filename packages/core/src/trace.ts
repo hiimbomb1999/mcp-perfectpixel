@@ -45,7 +45,15 @@ import {
   type SourceMapResolver,
 } from './sourcemap.js';
 import { searchSelectors, type TextMatch } from './search.js';
-import { buildPatches, findDesignTokens, type PatchRuleInput } from './patches.js';
+import {
+  buildPatches,
+  cascadeWinner,
+  findCulpritProp,
+  findDesignTokens,
+  inheritanceNotes,
+  sampleDesignColor,
+  type PatchRuleInput,
+} from './patches.js';
 import { assertTargetAllowed, type Mode } from './security.js';
 import { elementKeys, selectorKeyOf, specificityOf, type Specificity } from './css.js';
 
@@ -122,6 +130,7 @@ interface CollectedElement {
   id: string | null;
   classes: string[];
   computed: Record<string, string>;
+  parentComputed: Record<string, string>;
   rect: { x: number; y: number; width: number; height: number };
 }
 
@@ -195,12 +204,21 @@ const collectElementsScript = (arg: { points: Point[]; visualProps: readonly str
     const cs = getComputedStyle(element);
     const computed: Record<string, string> = {};
     for (const p of visualProps) computed[p] = cs.getPropertyValue(p);
+    // Parent computed style for the inherited-property heuristic: when the
+    // culprit color comes from an ancestor, we can say so instead of guessing.
+    const parent = element.parentElement;
+    const parentComputed: Record<string, string> = {};
+    if (parent) {
+      const pcs = getComputedStyle(parent);
+      for (const p of visualProps) parentComputed[p] = pcs.getPropertyValue(p);
+    }
     const rect = element.getBoundingClientRect();
     return {
       tag: element.tagName.toLowerCase(),
       id: element.id || null,
       classes: Array.from(element.classList),
       computed,
+      parentComputed,
       rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
     };
   });
@@ -419,6 +437,29 @@ export async function traceRegions(
       picked.element.computed,
       tokens,
     );
+    // Notes: explain when the culprit can't be patched (inherited, or not
+    // declared by any matched rule) instead of silently returning nothing.
+    const notes = [
+      ...inheritanceNotes(
+        options.design,
+        region,
+        picked.element.computed,
+        picked.element.parentComputed,
+      ),
+    ];
+    if (source.patches.length === 0) {
+      const designHex = sampleDesignColor(options.design, region);
+      if (designHex) {
+        const culprit = findCulpritProp(designHex, picked.element.computed, patchInputs);
+        if (culprit && !cascadeWinner(patchInputs, culprit)) {
+          notes.push(
+            `"${culprit}" differs from the design but no matched rule declares it — ` +
+              'it may come from an inline style or a rule the element does not match.',
+          );
+        }
+      }
+    }
+    source.notes = notes;
     out.push({ ...region, source });
   }
   return { regions: out, warnings };
@@ -572,6 +613,7 @@ function buildRegionSource(
     rules,
     confidence,
     patches: [],
+    notes: [],
   };
 }
 

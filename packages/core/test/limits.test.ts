@@ -62,6 +62,52 @@ describe('captureAndDiff limits', () => {
       }),
     ).rejects.toThrow(/waitMs/);
   });
+
+  it('hosted mode blocks private-network URLs, file:// and local paths', async () => {
+    const design = path.join(dir, 'design.png');
+    await expect(
+      captureAndDiff({
+        url: 'http://127.0.0.1:3000',
+        designImagePath: design,
+        mode: 'hosted',
+        repoRoot: dir,
+      }),
+    ).rejects.toThrow(/private-network/);
+    await expect(
+      captureAndDiff({
+        url: 'https://example.com',
+        designImagePath: 'file:///etc/passwd',
+        mode: 'hosted',
+        repoRoot: dir,
+      }),
+    ).rejects.toThrow(/file:\/\//);
+    await expect(
+      captureAndDiff({
+        url: 'https://example.com',
+        designImagePath: '/etc/passwd',
+        mode: 'hosted',
+        repoRoot: dir,
+      }),
+    ).rejects.toThrow(/local filesystem/);
+  });
+
+  it('hosted mode requires an explicit repoRoot', async () => {
+    await expect(
+      captureAndDiff({
+        url: 'https://example.com',
+        designImagePath: path.join(dir, 'design.png'),
+        mode: 'hosted',
+      }),
+    ).rejects.toThrow(/repoRoot/);
+  });
+
+  it('local mode still allows file:// and localhost', async () => {
+    // Validation must pass; the failure (if any) is a network/browser error,
+    // not a trust-boundary rejection.
+    await expect(
+      captureAndDiff({ url: 'file:///tmp/x.html', designImagePath: path.join(dir, 'design.png') }),
+    ).rejects.not.toThrow(/private-network|file:\/\/ only|local filesystem/);
+  });
 });
 
 describe('decodeImage limits', () => {

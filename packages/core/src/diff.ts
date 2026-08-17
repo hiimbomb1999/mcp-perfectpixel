@@ -177,21 +177,16 @@ export function mergeComponents(components: number[][], margin: number, width: n
     const rb = find(b);
     if (ra !== rb) parent[ra] = rb;
   };
-  // Expand each box by margin/2 so that two components merge exactly when the
-  // GAP between them is <= margin (a box expanded by e on each side intersects
-  // another when gap <= 2e).
-  const half = margin / 2;
-  const expanded = (box: Box) => ({
-    x1: box.x1 - half,
-    y1: box.y1 - half,
-    x2: box.x2 + half,
-    y2: box.y2 + half,
-  });
+  // Merge when the gap between two boxes is <= margin on both axes (boxes use
+  // inclusive coordinates, so subtract 1; overlapping axes count as gap <= 0
+  // and always qualify).
   for (let i = 0; i < n; i++) {
-    const a = expanded(boxes[i]!);
+    const a = boxes[i]!;
     for (let j = i + 1; j < n; j++) {
-      const b = expanded(boxes[j]!);
-      if (a.x1 <= b.x2 && b.x1 <= a.x2 && a.y1 <= b.y2 && b.y1 <= a.y2) union(i, j);
+      const b = boxes[j]!;
+      const gapX = Math.max(b.x1 - a.x2, a.x1 - b.x2) - 1;
+      const gapY = Math.max(b.y1 - a.y2, a.y1 - b.y2) - 1;
+      if (gapX <= margin && gapY <= margin) union(i, j);
     }
   }
 

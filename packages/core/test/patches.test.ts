@@ -4,7 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   buildPatches,
+  findCulpritProp,
   findDesignTokens,
+  inheritanceNotes,
   normalizeColor,
   sampleDesignColor,
   type PatchRuleInput,
@@ -306,5 +308,49 @@ describe('buildPatches', () => {
       [],
     );
     expect(patches).toEqual([]);
+  });
+});
+
+describe('findCulpritProp + inheritanceNotes', () => {
+  const GREEN_DESIGN = () => {
+    const design = makeImage(100, 100, [255, 255, 255]);
+    paint(design, 20, 20, 10, 10, [22, 163, 74]); // #16a34a
+    return design;
+  };
+  const REGION = { x: 20, y: 20, width: 10, height: 10 };
+
+  it('picks background-color before color when both differ', () => {
+    const culprit = findCulpritProp(
+      '#16a34a',
+      { 'background-color': 'rgb(220, 38, 38)', color: 'rgb(17, 17, 17)' },
+      [],
+    );
+    expect(culprit).toBe('background-color');
+  });
+
+  it('returns null when every parseable computed color matches the design', () => {
+    expect(findCulpritProp('#16a34a', { 'background-color': 'rgb(22, 163, 74)' }, [])).toBeNull();
+  });
+
+  it('notes an inherited color with parent evidence', () => {
+    const notes = inheritanceNotes(
+      GREEN_DESIGN(),
+      REGION,
+      { color: 'rgb(220, 38, 38)' }, // red text on the element
+      { color: 'rgb(0, 0, 0)' }, // black on the parent — inherited, not declared
+    );
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/inherited/);
+    expect(notes[0]).toContain('rgb(220, 38, 38)');
+  });
+
+  it('produces no note when the inherited color already matches the design', () => {
+    const notes = inheritanceNotes(
+      GREEN_DESIGN(),
+      REGION,
+      { color: 'rgb(22, 163, 74)' },
+      { color: 'rgb(22, 163, 74)' },
+    );
+    expect(notes).toEqual([]);
   });
 });

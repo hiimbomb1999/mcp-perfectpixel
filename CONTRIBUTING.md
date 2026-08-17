@@ -50,6 +50,14 @@ stdio, so always build before testing — `pnpm test` does this for you.
   page whose compiled CSS carries a `data:` source map (VLQ-encoded in the
   test) resolves rules to `src/_page.scss:line:column` with high confidence;
   an inline-styled element resolves to DOM evidence with low confidence.
+- `packages/server/test/trace-cascade.e2e.test.ts` — cascade correctness:
+  duplicate selectors map to their own lines, `@supports`/`@media`/
+  `@container` applies, pseudo-elements never match, `!important` beats
+  specificity, and a 400-rule Tailwind-like stylesheet still resolves the
+  element's own rule (key-bucketed candidates).
+- `packages/server/test/auth-stylesheet.e2e.test.ts` — a cookie-authenticated
+  stylesheet (401 without the session cookie) is traced through the browser's
+  request context, proving `page.request` carries the page's cookies.
 
 Add fixtures as plain static HTML under `packages/server/test/fixtures/` — keep
 them free of text and external assets so rendering stays deterministic across

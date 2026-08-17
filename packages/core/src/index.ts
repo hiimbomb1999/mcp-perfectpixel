@@ -4,10 +4,12 @@ export { decodeImage, decodeJpg, decodePng, resizeRgba } from './pixels.js';
 export { searchSelectors, GitignoreMatcher, classifyMatch } from './search.js';
 export {
   buildPatches,
+  cascadeWinner,
+  findCulpritProp,
   findDesignTokens,
+  inheritanceNotes,
   normalizeColor,
   sampleDesignColor,
-  cascadeWinner,
 } from './patches.js';
 export { pickElement, regionSamplePoints } from './trace.js';
 export { assertTargetAllowed, classifyTarget, isPrivateNetworkHost } from './security.js';

@@ -236,4 +236,52 @@ describe('cascade, conditional CSS and duplicate selectors', () => {
     expect(patch.current).toBe('#b91c1c'); // the !important rule wins
     expect(patch.line).toBe(1); // its own line
   });
+
+  it('keeps matching the right rule inside a huge (Tailwind-like) stylesheet', async () => {
+    // Hundreds of unrelated rules must not drown the element's own rule:
+    // candidate selectors are bucketed by the element's tag/class/id keys.
+    const dir3 = await mkdtemp(path.join(os.tmpdir(), 'mcp-perfectpixel-big-'));
+    const filler = Array.from(
+      { length: 400 },
+      (_, i) => `.c${i} { background-color: #0${i % 10}${(i % 16).toString(16)}0; }`,
+    ).join('\n');
+    const css = [
+      filler,
+      '.btn { position: absolute; top: 130px; left: 60px; width: 120px; height: 36px; background-color: #b91c1c; }',
+      'body { margin: 0; }',
+    ].join('\n');
+    await writeFile(path.join(dir3, 'page.css'), css);
+    await writeFile(path.join(dir3, 'design.css'), css.replace('#b91c1c', '#16a34a'));
+    await writeFile(path.join(dir3, 'page.html'), pageHtml('page.css'));
+    await writeFile(path.join(dir3, 'design.html'), pageHtml('design.css'));
+    const png = path.join(dir3, 'design.png');
+    const browser = await chromium.launch({ headless: true, args: LAUNCH_ARGS });
+    try {
+      const context = await browser.newContext({
+        viewport: VIEWPORT,
+        deviceScaleFactor: 1,
+        locale: 'en-US',
+        timezoneId: 'UTC',
+        colorScheme: 'light',
+        reducedMotion: 'reduce',
+      });
+      const page = await context.newPage();
+      await page.goto(pathToFileURL(path.join(dir3, 'design.html')).href, {
+        waitUntil: 'networkidle',
+      });
+      await page.screenshot({ path: png, type: 'png', animations: 'disabled' });
+      await context.close();
+    } finally {
+      await browser.close();
+    }
+    const r = await captureAndDiff({
+      url: pathToFileURL(path.join(dir3, 'page.html')).href,
+      designImagePath: png,
+      repoRoot: dir3,
+    });
+    await rm(dir3, { recursive: true, force: true });
+    const source = r.regions[0]!.source!;
+    expect(source.rules.some((rule) => rule.selector === '.btn')).toBe(true);
+    expect(source.patches[0]!.current).toBe('#b91c1c');
+  });
 });

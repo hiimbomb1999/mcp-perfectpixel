@@ -219,6 +219,8 @@ export function buildPatches(
 ): PatchSuggestion[] {
   const designHex = sampleDesignColor(design, region);
   if (!designHex || matched.length === 0) return [];
+  const chosenProp = findCulpritProp(designHex, elementComputed, matched);
+  if (chosenProp === null) return [];
   const tokensByValue = new Map<string, DesignToken[]>();
   for (const token of tokens) {
     const list = tokensByValue.get(token.value) ?? [];
@@ -226,46 +228,7 @@ export function buildPatches(
     tokensByValue.set(token.value, list);
   }
 
-  // 1) Most likely culprit: the first computed color property that differs
-  //    from the design (background dominates the region's pixels, then text
-  //    color, then borders, then outline) — never patch them all at once.
-  let chosenProp: string | null = null;
-  let sawParseableComputed = false;
-  for (const prop of COMPUTED_COLOR_ORDER) {
-    const computedVal = elementComputed[prop];
-    if (!computedVal) continue;
-    const norm = normalizeColor(computedVal);
-    if (norm === null) continue; // e.g. transparent / gradient — no pixel anchor
-    sawParseableComputed = true;
-    if (norm !== designHex) {
-      chosenProp = prop;
-      break;
-    }
-  }
-  // 2) Fallback only when computed values are unavailable (nothing to compare):
-  //    the declared color property differing most from the design. If the
-  //    computed colors are parseable and all match the design, the rendering
-  //    already matches — patching a declared value would change nothing.
-  if (chosenProp === null && !sawParseableComputed) {
-    let bestProp: string | null = null;
-    let bestDelta = -1;
-    for (const m of matched) {
-      for (const prop of m.properties) {
-        if (!COLOR_PROPS.has(prop)) continue;
-        const norm = normalizeColor(m.declared[prop] ?? '');
-        if (norm === null || norm === designHex) continue;
-        const delta = colorDistance(norm, designHex);
-        if (delta > bestDelta) {
-          bestDelta = delta;
-          bestProp = prop;
-        }
-      }
-    }
-    chosenProp = bestProp;
-  }
-  if (chosenProp === null) return [];
-
-  // 3) Cascade winner for the chosen property.
+  // Cascade winner for the chosen property.
   const winner = cascadeWinner(matched, chosenProp);
   if (!winner || !winner.source) return [];
 
@@ -290,6 +253,87 @@ export function buildPatches(
       confidence: winner.confidence,
     },
   ];
+}
+
+/**
+ * The single property most likely to have caused the diff: the first computed
+ * color property that differs from the design color (background first, then
+ * text color, borders, outline). Falls back to the declared property with the
+ * largest color delta only when no computed value is parseable.
+ */
+export function findCulpritProp(
+  designHex: string,
+  elementComputed: Record<string, string>,
+  matched: PatchRuleInput[],
+): string | null {
+  let sawParseableComputed = false;
+  for (const prop of COMPUTED_COLOR_ORDER) {
+    const computedVal = elementComputed[prop];
+    if (!computedVal) continue;
+    const norm = normalizeColor(computedVal);
+    if (norm === null) continue; // e.g. transparent / gradient — no pixel anchor
+    sawParseableComputed = true;
+    if (norm !== designHex) return prop;
+  }
+  // Fallback only when computed values are unavailable (nothing to compare).
+  if (!sawParseableComputed) {
+    let bestProp: string | null = null;
+    let bestDelta = -1;
+    for (const m of matched) {
+      for (const prop of m.properties) {
+        if (!COLOR_PROPS.has(prop)) continue;
+        const norm = normalizeColor(m.declared[prop] ?? '');
+        if (norm === null || norm === designHex) continue;
+        const delta = colorDistance(norm, designHex);
+        if (delta > bestDelta) {
+          bestDelta = delta;
+          bestProp = prop;
+        }
+      }
+    }
+    return bestProp;
+  }
+  return null;
+}
+
+/** Properties inherited from ancestors (relevant when nothing declares them). */
+const INHERITED_COLOR_PROPS = new Set(['color']);
+
+/**
+ * Explain why a region produced no patch, without guessing a file: when the
+ * culprit property is inherited (e.g. `color`) and no rule on the element
+ * declares it, the fix lives on an ancestor — say so with the parent's
+ * computed value as evidence.
+ */
+export function inheritanceNotes(
+  design: RgbaImage,
+  region: { x: number; y: number; width: number; height: number },
+  elementComputed: Record<string, string>,
+  parentComputed: Record<string, string>,
+): string[] {
+  const designHex = sampleDesignColor(design, region);
+  if (!designHex) return [];
+  const notes: string[] = [];
+  for (const prop of INHERITED_COLOR_PROPS) {
+    const elVal = elementComputed[prop];
+    if (!elVal) continue;
+    const norm = normalizeColor(elVal);
+    if (norm === null || norm === designHex) continue; // not the culprit
+    const parentVal = parentComputed[prop];
+    if (parentVal !== undefined && parentVal !== elVal) {
+      notes.push(
+        `"${prop}" differs from the design (computed ${elVal} here, ${parentVal} on the parent) ` +
+          'but no rule on this element declares it — the value is inherited; ' +
+          'the fix likely belongs to a rule targeting an ancestor.',
+      );
+    } else {
+      notes.push(
+        `"${prop}" differs from the design but no rule on this element declares it — ` +
+          'the value is likely inherited from an ancestor rule.',
+      );
+    }
+  }
+  return notes;
 }
 
 /** The property name a rule declares that covers `prop` (or null). */

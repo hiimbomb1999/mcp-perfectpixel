@@ -350,6 +350,34 @@ node examples/demo.mjs /tmp/design.png https://localhost:3000
   (framework-agnostic, no MCP dependency) so future adapters and tooling can
   reuse it without pulling in the protocol layer.
 
+## Hardening
+
+- **Cascade-correct patches** — a patch always targets the cascade winner for
+  the single most likely culprit property (specificity, declaration order,
+  `!important`; shorthands participate in their longhand cascade). Duplicate
+  selectors map to their **own** source-map positions — no shared counters.
+- **Conditional CSS** — `@media` via `matchMedia()`, `@supports` via
+  `CSS.supports()`; `@container` is reported as `applies: "unknown"` rather
+  than guessed. Pseudo-element rules never match the element.
+- **Inheritance** — when the culprit color is inherited (no rule on the element
+  declares it), the result carries a `notes[]` hint with the parent's computed
+  value instead of guessing a file.
+- **Resource limits** — viewport ≤ 16.7M px / 8192 side, `waitMs` ≤ 60s, design
+  images ≤ 50MB (checked with `stat()` before reading), ≤ 50 diff regions,
+  bounded candidate selectors (key-bucketed, so huge Tailwind stylesheets stay
+  fast), fetch timeouts, and source/token scans capped at 5MB files.
+- **Trust boundary** — `mode: "local"` (default) allows `file://` and local
+  paths; `mode: "hosted"` blocks them and private-network hosts (SSRF
+  protection) and requires an explicit `repoRoot`.
+- **Session-aware stylesheets** — stylesheets are fetched through the browser's
+  request context, so cookies/session apply and the traced CSS matches what the
+  page actually rendered.
+- **Honest tracing** — failures and truncations are reported via
+  `trace.status` / `trace.warnings`; text-search matches in tests/docs/generated
+  files are deprioritized and lower confidence.
+- **Secret hygiene** — `.env`/`.npmrc` are gitignored; CI runs Gitleaks and the
+  publish workflow runs lint + the full test suite before releasing.
+
 ### The boundary (what the server will never do)
 
 Goal 4 is a hard design constraint, not a feature: the server supplies

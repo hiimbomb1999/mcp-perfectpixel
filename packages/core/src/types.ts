@@ -153,6 +153,12 @@ export interface RegionSource {
    * project already defines. Empty when nothing actionable resolved.
    */
   patches: PatchSuggestion[];
+  /**
+   * Human-readable hints for cases with no anchorable patch — e.g. the
+   * culprit color is inherited from an ancestor, or set by an inline style /
+   * unmatched rule. Never guesses a file.
+   */
+  notes: string[];
 }
 
 export type TokenKind = 'css-variable' | 'tailwind' | 'style-dictionary';

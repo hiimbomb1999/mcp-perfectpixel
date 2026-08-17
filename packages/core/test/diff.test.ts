@@ -70,6 +70,18 @@ describe('diffImages', () => {
     expect(result.regions[0]).toMatchObject({ x: 20, y: 20, width: 12, height: 4, pixelCount: 32 });
   });
 
+  it('merges exactly at the margin gap but not beyond it', () => {
+    const make = (gap: number) => {
+      const design = makeImage(100, 100, [255, 255, 255]);
+      const page = makeImage(100, 100, [255, 255, 255]);
+      paint(page, 20, 20, 4, 4, [255, 0, 0]);
+      paint(page, 20 + 4 + gap, 20, 4, 4, [255, 0, 0]);
+      return diffImages(design, page);
+    };
+    expect(make(12).regions).toHaveLength(1); // gap == margin -> merge
+    expect(make(13).regions).toHaveLength(2); // gap > margin -> separate
+  });
+
   it('scores a large solid color change as high severity', () => {
     const design = makeImage(100, 100, [255, 255, 255]);
     const page = makeImage(100, 100, [255, 255, 255]);
