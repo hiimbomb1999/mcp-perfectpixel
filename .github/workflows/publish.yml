@@ -21,7 +21,7 @@ jobs:
 
       # pnpm version comes from the root package.json "packageManager" field
       # (single source of truth — don't also set `version:` here).
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v7
         with:
