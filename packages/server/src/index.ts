@@ -27,7 +27,9 @@ const sourceLocationSchema = z.object({
   column: z.number(),
   via: z.enum(['source-map', 'text-search']),
   gitignored: z.boolean(),
-  context: z.enum(['source-css', 'source', 'test', 'docs', 'generated']).optional(),
+  context: z
+    .enum(['source-css', 'source', 'test', 'docs', 'generated', 'liquid-schema', 'vue-sfc-style'])
+    .optional(),
 });
 const ruleSchema = z.object({
   selector: z.string(),
@@ -55,9 +57,13 @@ const patchSchema = z.object({
       value: z.string(),
       file: z.string(),
       line: z.number(),
-      kind: z.enum(['css-variable', 'tailwind', 'style-dictionary']),
+      kind: z.enum(['css-variable', 'scss', 'tailwind', 'style-dictionary']),
     })
     .nullable(),
+  figmaToken: z
+    .object({ name: z.string(), value: z.string(), kind: z.string() })
+    .nullable()
+    .optional(),
   confidence: confidenceSchema,
 });
 const regionSchema = z.object({
@@ -73,6 +79,7 @@ const regionSchema = z.object({
   maxDelta: z.number(),
   score: z.number(),
   severity: z.enum(['high', 'medium', 'low']),
+  figmaNode: z.string().nullable().optional(),
   source: z
     .object({
       element: z.object({
@@ -194,6 +201,59 @@ server.registerTool(
           "Trust boundary. 'local' (default) allows file:// URLs and local paths. 'hosted' blocks " +
             'file://, local paths and private-network hosts (SSRF protection) and requires an explicit repoRoot.',
         ),
+      platform: z
+        .enum(['shopify', 'bigcommerce', 'html-tailwind', 'react', 'vue', 'auto'])
+        .optional()
+        .describe(
+          'Codebase type — narrows source search priority globs and token scanning (SCSS variables, ' +
+            "Shopify theme schema JSON). Default 'auto': detected from repoRoot markers.",
+        ),
+      designContext: z
+        .object({
+          scale: z
+            .number()
+            .positive()
+            .optional()
+            .describe(
+              'Export scale of the design image relative to the Figma frame (1, 2 or 3). If set, the ' +
+                'viewport is derived by dividing the image dimensions by the scale instead of using raw pixels.',
+            ),
+          tokens: z
+            .array(
+              z.object({
+                name: z.string(),
+                value: z.string(),
+                kind: z.enum(['color', 'spacing', 'radius', 'font']),
+              }),
+            )
+            .optional()
+            .describe(
+              'Design tokens resolved from Figma variables/styles. Matched before repo-scanned tokens.',
+            ),
+          nodes: z
+            .array(
+              z.object({
+                name: z.string(),
+                x: z.number(),
+                y: z.number(),
+                width: z.number(),
+                height: z.number(),
+              }),
+            )
+            .optional()
+            .describe('Figma node bounding boxes (design image space) for annotating regions.'),
+        })
+        .optional()
+        .describe('Extra design context supplied by the caller, e.g. from the Figma MCP server.'),
+      textRegionThreshold: z
+        .number()
+        .min(0)
+        .max(1)
+        .optional()
+        .describe(
+          'Extra pixelmatch threshold for text-like regions (high color variance). Regions whose diff ' +
+            'disappears under this more lenient threshold are dropped as anti-aliasing noise.',
+        ),
     },
     outputSchema,
   },
@@ -209,6 +269,9 @@ server.registerTool(
         diffThreshold: args.diffThreshold,
         repoRoot: args.repoRoot,
         mode: args.mode,
+        platform: args.platform,
+        designContext: args.designContext,
+        textRegionThreshold: args.textRegionThreshold,
       });
       return {
         // Typed payload for clients that support structuredContent...

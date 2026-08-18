@@ -10,8 +10,10 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import ignore, { type Ignore } from 'ignore';
 import { FileTextCache } from './fileread.js';
+import type { Platform } from './types.js';
 
-export type MatchContext = 'source-css' | 'source' | 'test' | 'docs' | 'generated';
+export type MatchContext =
+  'source-css' | 'source' | 'test' | 'docs' | 'generated' | 'liquid-schema' | 'vue-sfc-style';
 
 export interface TextMatch {
   /** Path relative to the search root. */
@@ -39,7 +41,7 @@ const MAX_MATCHES_PER_SELECTOR = 25;
 
 const CSS_EXT = /\.(css|scss|less|styl)$/i;
 const TEST_PATH = /(^|\/)(__tests__|tests?|specs?)(\/|\.)/i;
-const DOCS_PATH = /(^|\/)(docs?|examples?|fixtures?|templates?)(\/|$)/i;
+const DOCS_PATH = /(^|\/)(docs?|examples?|fixtures?)(\/|$)/i;
 const DOCS_FILE = /(^|\/)(readme|changelog|changes?|license|contributing)(\.|$)/i;
 const GENERATED_PATH = /(^|\/)(node_modules|dist|build|vendor|coverage)(\/|$)/i;
 const GENERATED_FILE = /\.(min|bundle|chunk)\./i;
@@ -50,8 +52,81 @@ export function classifyMatch(file: string): MatchContext {
   if (GENERATED_PATH.test(lower) || GENERATED_FILE.test(lower)) return 'generated';
   if (TEST_PATH.test(lower) || /\.(test|spec)\./.test(lower)) return 'test';
   if (DOCS_PATH.test(lower) || DOCS_FILE.test(lower)) return 'docs';
+  if (/\.liquid$/i.test(lower)) return 'liquid-schema';
+  if (/\.vue$/i.test(lower)) return 'vue-sfc-style';
   if (CSS_EXT.test(lower)) return 'source-css';
   return 'source';
+}
+
+/** Priority include-globs per platform — matches rank first, others are not excluded. */
+const PLATFORM_GLOBS: Record<Exclude<Platform, 'auto'>, string[]> = {
+  shopify: ['sections/', 'snippets/', 'assets/*.css', 'assets/*.scss'],
+  bigcommerce: ['templates/', 'assets/scss/', 'assets/js/'],
+  react: ['src/', '**/*.module.css'],
+  vue: ['**/*.vue'],
+  'html-tailwind': ['**/*.html', 'tailwind.config.'],
+};
+
+/** Does a repo-relative path match any of the platform's priority globs? */
+export function matchesPlatformGlobs(file: string, platform: Platform | undefined): boolean {
+  if (!platform || platform === 'auto') return false;
+  const lower = file.toLowerCase();
+  return (PLATFORM_GLOBS[platform] ?? []).some((glob) => {
+    if (glob.endsWith('/')) return lower.startsWith(glob.toLowerCase());
+    if (glob.includes('*')) {
+      // e.g. assets/*.css or **/*.vue — match the tail, allow any leading dirs.
+      const tail = glob.split('*').pop()!.toLowerCase();
+      return lower.endsWith(tail);
+    }
+    return lower.includes(glob.toLowerCase());
+  });
+}
+
+/**
+ * Detect the platform from repo markers (cheap shallow scan, depth ≤ 2):
+ * any *.liquid → shopify; stencil.conf.json or templates/ → bigcommerce;
+ * package.json deps → vue/react; tailwind config alone → html-tailwind.
+ */
+export async function detectPlatform(root: string): Promise<Exclude<Platform, 'auto'> | undefined> {
+  // Collect file names at depth 1 and 2 (enough for sections/*.liquid etc.).
+  const names: string[] = [];
+  const scan = async (dir: string, depth: number): Promise<void> => {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name === 'node_modules' || entry.name === '.git') continue;
+      if (entry.isFile()) names.push(entry.name.toLowerCase());
+      else if (depth < 2) await scan(path.join(dir, entry.name), depth + 1);
+    }
+  };
+  await scan(root, 0);
+
+  if (names.some((n) => n.endsWith('.liquid'))) return 'shopify';
+  if (names.includes('stencil.conf.json')) return 'bigcommerce';
+  const hasTemplates = names.includes('templates');
+  const hasAssets = names.includes('assets');
+  const tailwind = names.some((n) => n.startsWith('tailwind.config.'));
+  if (names.includes('package.json')) {
+    try {
+      const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+      if (deps['vue']) return 'vue';
+      if (deps['react']) return 'react';
+      if (tailwind && !deps['react']) return 'html-tailwind';
+    } catch {
+      // fall through
+    }
+  }
+  if (hasTemplates || hasAssets) return 'bigcommerce';
+  if (tailwind) return 'html-tailwind';
+  return undefined;
 }
 
 /** Does the matched line look like a CSS rule header (selector followed by { or ,)? */
@@ -119,15 +194,17 @@ interface FileHit {
 /**
  * Search `root` for the given selector strings (e.g. `.button`, `#header`),
  * respecting .gitignore. Returns selectors -> matches, best first:
- * non-ignored over gitignored, stylesheet-family source over other source
- * over tests/docs, rule-header matches over bare substrings, and (when `near`
- * is given) matches sharing the deepest directory prefix with it.
+ * non-ignored over gitignored, platform-priority globs first, stylesheet-family
+ * source over other source over tests/docs, rule-header matches over bare
+ * substrings, and (when `near` is given) matches sharing the deepest directory
+ * prefix with it.
  */
 export async function searchSelectors(
   root: string,
   selectors: string[],
   near?: string,
   cache: FileTextCache = new FileTextCache(),
+  platform?: Platform,
 ): Promise<Map<string, TextMatch[]>> {
   const matcher = new GitignoreMatcher(root);
   const wanted = new Set(selectors.filter((s) => s.length > 0));
@@ -139,6 +216,8 @@ export async function searchSelectors(
   const nearDir = near ? path.posix.dirname(near) : '';
   const contextRank: Record<MatchContext, number> = {
     'source-css': 0,
+    'liquid-schema': 0,
+    'vue-sfc-style': 0,
     source: 1,
     test: 2,
     docs: 3,
@@ -152,6 +231,11 @@ export async function searchSelectors(
       if (Number(a.gitignored) !== Number(b.gitignored)) {
         return Number(a.gitignored) - Number(b.gitignored);
       }
+      // Platform-priority globs rank before everything else.
+      const plat =
+        Number(matchesPlatformGlobs(b.relPath, platform)) -
+        Number(matchesPlatformGlobs(a.relPath, platform));
+      if (plat !== 0) return plat;
       const ctx = contextRank[a.context] - contextRank[b.context];
       if (ctx !== 0) return ctx;
       const dist = directoryDistance(b.relPath, nearDir) - directoryDistance(a.relPath, nearDir);

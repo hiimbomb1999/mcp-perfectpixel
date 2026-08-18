@@ -1,7 +1,13 @@
 export { captureAndDiff } from './capture.js';
 export { diffImages, findComponents, mergeComponents } from './diff.js';
 export { decodeImage, decodeJpg, decodePng, resizeRgba } from './pixels.js';
-export { searchSelectors, GitignoreMatcher, classifyMatch } from './search.js';
+export {
+  searchSelectors,
+  GitignoreMatcher,
+  classifyMatch,
+  detectPlatform,
+  matchesPlatformGlobs,
+} from './search.js';
 export {
   buildPatches,
   cascadeWinner,

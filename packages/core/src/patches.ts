@@ -15,7 +15,16 @@ import path from 'node:path';
 import { GitignoreMatcher } from './search.js';
 import { FileTextCache } from './fileread.js';
 import { compareSpecificity, type Specificity } from './css.js';
-import type { Confidence, RgbaImage, SourceLocation } from './types.js';
+import type {
+  Confidence,
+  DesignToken,
+  FigmaToken,
+  PatchSuggestion,
+  Platform,
+  RgbaImage,
+  SourceLocation,
+  TokenKind,
+} from './types.js';
 
 /** Color-like properties a patch can target. */
 const COLOR_PROPS = new Set([
@@ -51,47 +60,6 @@ const SHORTHAND_COVER: Record<string, string[]> = {
   'border-left-color': ['border-color', 'border'],
   'outline-color': ['outline'],
 };
-
-export type TokenKind = 'css-variable' | 'tailwind' | 'style-dictionary';
-
-export interface DesignToken {
-  /** Token name, e.g. `--color-success` or `colors.success`. */
-  name: string;
-  /** How to reference it in a patch, e.g. `var(--color-success)`. */
-  reference: string;
-  /** Normalized hex value, e.g. `#16a34a`. */
-  value: string;
-  /** Repo-relative path of the file defining it. */
-  file: string;
-  /** 1-based line of the definition. */
-  line: number;
-  kind: TokenKind;
-}
-
-export interface PatchSuggestion {
-  /** Repo-relative file to change (the rule's source location). */
-  file: string;
-  /** 1-based line. */
-  line: number;
-  /** 1-based column. */
-  column: number;
-  /** The property to change, e.g. `background-color`. */
-  property: string;
-  /** The value currently declared by the rule, e.g. `#dc2626`. */
-  current: string;
-  /**
-   * The minimal suggested replacement: a token reference when the design color
-   * matches a project token, otherwise the hex value derived from the design
-   * image.
-   */
-  suggested: string;
-  /** The normalized hex color the design image shows at the region. */
-  value: string;
-  /** The matched token, when one was preferred. */
-  token: DesignToken | null;
-  /** Inherited from the rule's source confidence. */
-  confidence: Confidence;
-}
 
 /**
  * Sample the design image at a region and return the dominant opaque color as
@@ -183,6 +151,7 @@ export function normalizeColor(value: string): string | null {
 export async function findDesignTokens(
   repoRoot: string,
   cache: FileTextCache = new FileTextCache(),
+  platform?: Platform,
 ): Promise<DesignToken[]> {
   const matcher = new GitignoreMatcher(repoRoot);
   const tokens: DesignToken[] = [];
@@ -192,6 +161,11 @@ export async function findDesignTokens(
     const lower = relPath.toLowerCase();
     if (/\.(css|scss|less|styl)$/.test(lower)) {
       scanCssVariables(text, relPath, tokens);
+      if (platform === 'bigcommerce' || /\.scss$/.test(lower)) {
+        scanScssVariables(text, relPath, tokens);
+      }
+    } else if (/\.liquid$/.test(lower) && platform === 'shopify') {
+      scanShopifySchema(text, relPath, tokens);
     } else if (/tailwind\.config\./.test(lower) && /\.(js|cjs|mjs|ts)$/.test(lower)) {
       scanTailwindConfig(text, relPath, tokens);
     } else if (/\.json$/.test(lower) && /token/.test(lower)) {
@@ -410,11 +384,12 @@ function hexToRgb(hex: string): [number, number, number] {
 function preferToken(candidates: DesignToken[]): DesignToken | null {
   if (candidates.length === 0) return null;
   // CSS custom properties are the most portable reference (var(--x)); then
-  // style-dictionary names; tailwind last (framework-specific usage).
+  // SCSS variables and style-dictionary names; tailwind last (framework usage).
   const rank: Record<TokenKind, number> = {
     'css-variable': 0,
-    'style-dictionary': 1,
-    tailwind: 2,
+    scss: 1,
+    'style-dictionary': 2,
+    tailwind: 3,
   };
   return [...candidates].sort((a, b) => rank[a.kind] - rank[b.kind])[0]!;
 }
@@ -510,6 +485,62 @@ function scanStyleDictionary(text: string, relPath: string, tokens: DesignToken[
     }
   };
   walk(json, '');
+}
+
+/** SCSS variables — `$name: value;` — the token source on BigCommerce themes. */
+export function scanScssVariables(text: string, relPath: string, tokens: DesignToken[]): void {
+  const re = /\$([a-zA-Z0-9_-]+)\s*:\s*([^;{}]+);/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const value = normalizeColor(m[2]!);
+    if (!value) continue;
+    const name = m[1]!;
+    tokens.push({
+      name,
+      reference: `$${name}`,
+      value,
+      file: relPath,
+      line: lineOf(text, m.index),
+      kind: 'scss',
+    });
+  }
+}
+
+/**
+ * Shopify theme schema JSON (`{%- schema -%} ... {%- endschema -%}`) — the
+ * settings blocks are the theme's real design tokens (colors, etc.). We only
+ * extract the JSON between the schema tags; no full Liquid parsing.
+ */
+export function scanShopifySchema(text: string, relPath: string, tokens: DesignToken[]): void {
+  const blockRe = /{%-?\s*schema\s*-?%}([\s\S]*?){%-?\s*endschema\s*-?%}/g;
+  let block: RegExpExecArray | null;
+  while ((block = blockRe.exec(text)) !== null) {
+    let json: unknown;
+    try {
+      json = JSON.parse(block[1]!);
+    } catch {
+      continue;
+    }
+    const settings = (json as { settings?: unknown }).settings;
+    if (!Array.isArray(settings)) continue;
+    for (const setting of settings) {
+      if (setting === null || typeof setting !== 'object') continue;
+      const s = setting as { type?: unknown; id?: unknown; default?: unknown };
+      if (s.type !== 'color' || typeof s.id !== 'string' || typeof s.default !== 'string') {
+        continue;
+      }
+      const value = normalizeColor(s.default);
+      if (!value) continue;
+      tokens.push({
+        name: `settings:${s.id}`,
+        reference: `settings.${s.id}`,
+        value,
+        file: relPath,
+        line: lineOf(text, text.indexOf(JSON.stringify(s.default))),
+        kind: 'style-dictionary',
+      });
+    }
+  }
 }
 
 function lineOf(text: string, index: number): number {

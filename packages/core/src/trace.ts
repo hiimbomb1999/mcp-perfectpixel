@@ -30,9 +30,11 @@ import * as csstree from 'css-tree';
 import type { Page } from 'playwright';
 import type {
   Confidence,
+  DesignContext,
   DiffRegion,
-  RegionSource,
+  Platform,
   RgbaImage,
+  RegionSource,
   RuleEvidence,
   SourceLocation,
 } from './types.js';
@@ -44,7 +46,7 @@ import {
   type SourceMapV3,
   type SourceMapResolver,
 } from './sourcemap.js';
-import { searchSelectors, type TextMatch } from './search.js';
+import { searchSelectors, detectPlatform, type TextMatch } from './search.js';
 import { FileTextCache } from './fileread.js';
 import {
   buildPatches,
@@ -181,6 +183,10 @@ export interface TraceOptions {
   mode: Mode;
   /** computedStyle verbosity per region: 'full' | 'minimal' (default) | 'none'. */
   computedStyle: 'full' | 'minimal' | 'none';
+  /** Codebase type ('auto' = detect from repoRoot markers). */
+  platform: Platform;
+  /** Extra design context from the caller (Figma MCP): tokens + node boxes. */
+  designContext?: DesignContext;
 }
 
 export interface TraceWarnings {
@@ -288,7 +294,9 @@ export async function traceRegions(
   const warnings: string[] = [];
   const responsive = { mediaQueries: 0, containerQueries: 0 };
   if (regions.length === 0) return { regions, warnings, responsive };
-  const { repoRoot, mode, computedStyle } = options;
+  const { repoRoot, mode, computedStyle, platform } = options;
+  const resolvedPlatform =
+    platform === 'auto' ? ((await detectPlatform(repoRoot)) ?? undefined) : platform;
 
   // Sample several points per region (center + quarter points) so the element
   // is found even when the center sits on a transparent/empty spot.
@@ -403,11 +411,12 @@ export async function traceRegions(
           searchSelectorsToRun,
           sheetNearPath(loaded, repoRoot),
           fileCache,
+          resolvedPlatform,
         )
       : new Map<string, TextMatch[]>();
 
   // Design tokens for patch suggestions (reuses the same file cache).
-  const tokens = await findDesignTokens(repoRoot, fileCache);
+  const tokens = await findDesignTokens(repoRoot, fileCache, resolvedPlatform);
 
   const out: DiffRegion[] = [];
   let pointCursor = 0;
@@ -744,7 +753,12 @@ function searchFallback(
   if (!best) return { source: null, confidence: 'low' };
   // Non-source contexts (tests, docs, generated) are deprioritized: the real
   // source lives elsewhere, so the match is low-confidence evidence only.
-  const credible = best.context === 'source' || best.context === 'source-css';
+  // liquid-schema / vue-sfc-style / source-css are genuine source locations.
+  const credible =
+    best.context === 'source' ||
+    best.context === 'source-css' ||
+    best.context === 'liquid-schema' ||
+    best.context === 'vue-sfc-style';
   return {
     source: {
       file: best.file,

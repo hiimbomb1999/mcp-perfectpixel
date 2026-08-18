@@ -53,9 +53,52 @@ export interface CaptureOptions {
    * Default true.
    */
   trace?: boolean;
+  /**
+   * Codebase type — narrows source search priority globs and token scanning
+   * (e.g. SCSS variables, Shopify theme schema JSON). Default 'auto' (detected
+   * from repoRoot markers).
+   */
+  platform?: Platform;
+  /** Extra design context (from Figma MCP): export scale, resolved tokens, node boxes. */
+  designContext?: DesignContext;
+  /**
+   * Extra pixelmatch threshold for text-like regions (high color variance).
+   * When set, regions whose diff disappears under this more lenient threshold
+   * are dropped as anti-aliasing noise.
+   */
+  textRegionThreshold?: number;
 }
 
 export type Severity = 'high' | 'medium' | 'low';
+
+/** Codebase type — narrows source search priority and token scanning. */
+export type Platform = 'shopify' | 'bigcommerce' | 'html-tailwind' | 'react' | 'vue' | 'auto';
+
+/** A design token resolved from Figma (variables/styles) — ground truth. */
+export interface FigmaToken {
+  name: string;
+  value: string;
+  kind: 'color' | 'spacing' | 'radius' | 'font';
+}
+
+/** A Figma node bounding box (design image coordinate space). */
+export interface FigmaNode {
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Extra design context provided by the caller (e.g. from Figma MCP). */
+export interface DesignContext {
+  /** Export scale of the design image relative to the Figma frame (1/2/3). */
+  scale?: number;
+  /** Figma-resolved tokens — matched before repo-scanned tokens. */
+  tokens?: FigmaToken[];
+  /** Figma node boxes for annotating regions with layer names. */
+  nodes?: FigmaNode[];
+}
 
 /**
  * One grouped diff region — a cluster of differing pixels with its bounding box
@@ -90,6 +133,8 @@ export interface DiffRegion {
    * `null` when tracing is disabled or the region has no element.
    */
   source: RegionSource | null;
+  /** Figma layer name of the node overlapping this region (when designContext.nodes given). */
+  figmaNode?: string | null;
 }
 
 /** How confident we are that a source location is the real origin. */
@@ -107,7 +152,8 @@ export interface SourceLocation {
   /** True when the file is gitignored (e.g. compiled/build output). */
   gitignored: boolean;
   /** For text-search matches: where the match lives (source/test/docs/...). */
-  context?: 'source-css' | 'source' | 'test' | 'docs' | 'generated';
+  context?:
+    'source-css' | 'source' | 'test' | 'docs' | 'generated' | 'liquid-schema' | 'vue-sfc-style';
 }
 
 /** The DOM element sitting at a diff region. */
@@ -168,7 +214,8 @@ export interface RegionSource {
   notes: string[];
 }
 
-export type TokenKind = 'css-variable' | 'tailwind' | 'style-dictionary';
+/** Design token kind, incl. SCSS variables ($var) from platforms like BigCommerce. */
+export type TokenKind = 'css-variable' | 'scss' | 'tailwind' | 'style-dictionary';
 
 /** A design token the project already defines. */
 export interface DesignToken {
@@ -199,14 +246,16 @@ export interface PatchSuggestion {
   current: string;
   /**
    * The minimal suggested replacement: a token reference when the design
-   * color matches a project token, otherwise the hex value derived from the
-   * design image.
+   * color matches a token (Figma-resolved first, then repo-scanned), otherwise
+   * the hex value derived from the design image.
    */
   suggested: string;
   /** The normalized hex color the design image shows at the region. */
   value: string;
-  /** The matched token, when one was preferred over a hardcoded value. */
+  /** The matched repo-scanned token, when one was preferred over a hardcoded value. */
   token: DesignToken | null;
+  /** The matched Figma-resolved token (ground truth), when provided and matching. */
+  figmaToken?: { name: string; value: string; kind: string } | null;
   /** Inherited from the rule's source confidence. */
   confidence: Confidence;
 }

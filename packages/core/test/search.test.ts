@@ -98,3 +98,55 @@ describe('searchSelectors', () => {
     expect(results.get('.button')!.some((m) => m.file === 'src/huge.bin')).toBe(false);
   });
 });
+
+describe('platform-aware search', () => {
+  it('ranks platform priority globs above alphabetical order', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'mcp-perfectpixel-platform-'));
+    await mkdir(path.join(root, 'sections'), { recursive: true });
+    await writeFile(path.join(root, 'aaa.liquid'), '.btn { color: red; }\n');
+    await writeFile(path.join(root, 'sections', 'zzz.scss'), '.btn { color: red; }\n');
+    // Without a platform, alphabetical order wins (aaa.liquid first).
+    const plain = await searchSelectors(root, ['.btn']);
+    expect(plain.get('.btn')![0]!.file).toBe('aaa.liquid');
+    // With shopify, sections/ is a priority glob -> sections/zzz.scss first.
+    const shopify = await searchSelectors(root, ['.btn'], undefined, undefined, 'shopify');
+    expect(shopify.get('.btn')![0]!.file).toBe('sections/zzz.scss');
+    // .liquid matches are classified as liquid-schema (a real source context).
+    expect(shopify.get('.btn')!.find((m) => m.file === 'aaa.liquid')!.context).toBe(
+      'liquid-schema',
+    );
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('auto-detects the platform from repo markers', async () => {
+    const mk = async (files: Record<string, string>) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'mcp-perfectpixel-detect-'));
+      for (const [rel, content] of Object.entries(files)) {
+        await mkdir(path.join(root, path.dirname(rel)), { recursive: true });
+        await writeFile(path.join(root, rel), content);
+      }
+      return root;
+    };
+    const { detectPlatform } = await import('@mcp-perfectpixel/core');
+
+    let root = await mk({ 'sections/header.liquid': 'x' });
+    expect(await detectPlatform(root)).toBe('shopify');
+    await rm(root, { recursive: true, force: true });
+
+    root = await mk({ 'stencil.conf.json': '{}', 'templates/index.html': '<div></div>' });
+    expect(await detectPlatform(root)).toBe('bigcommerce');
+    await rm(root, { recursive: true, force: true });
+
+    root = await mk({ 'package.json': '{"dependencies":{"vue":"^3"}}' });
+    expect(await detectPlatform(root)).toBe('vue');
+    await rm(root, { recursive: true, force: true });
+
+    root = await mk({ 'tailwind.config.js': 'module.exports = {}' });
+    expect(await detectPlatform(root)).toBe('html-tailwind');
+    await rm(root, { recursive: true, force: true });
+
+    root = await mk({ 'README.md': 'nothing here' });
+    expect(await detectPlatform(root)).toBeUndefined();
+    await rm(root, { recursive: true, force: true });
+  });
+});

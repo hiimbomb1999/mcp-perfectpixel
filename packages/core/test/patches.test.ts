@@ -132,6 +132,45 @@ describe('findDesignTokens', () => {
     expect(byName.has('--hidden')).toBe(false);
     expect(byName.has('x')).toBe(false);
   });
+
+  it('scans SCSS variables ($var) as design tokens', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'mcp-perfectpixel-scss-'));
+    await mkdir(path.join(root, 'assets'), { recursive: true });
+    await writeFile(
+      path.join(root, 'assets', '_colors.scss'),
+      '$primary-color: #16a34a;\n$danger: rgb(220, 38, 38);\n$spacing: 16px;\n',
+    );
+    await writeFile(path.join(root, 'styles.scss'), '$brand: #2563eb;\n');
+    const tokens = await findDesignTokens(root, undefined, 'bigcommerce');
+    const byName = new Map(tokens.map((t) => [t.name, t]));
+    expect(byName.get('primary-color')).toMatchObject({
+      reference: '$primary-color',
+      value: '#16a34a',
+      kind: 'scss',
+    });
+    expect(byName.get('danger')!.value).toBe('#dc2626');
+    expect(byName.get('brand')).toBeDefined(); // .scss always scanned
+    expect(byName.get('spacing')).toBeUndefined(); // non-color skipped
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('extracts Shopify theme schema settings as tokens', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'mcp-perfectpixel-schema-'));
+    await mkdir(path.join(root, 'sections'), { recursive: true });
+    await writeFile(
+      path.join(root, 'sections', 'header.liquid'),
+      '{%- schema -%}\n{"settings": [\n  {"type": "color", "id": "color_primary", "default": "#2563eb"},\n  {"type": "color", "id": "color_bg", "default": "rgb(255, 255, 255)"},\n  {"type": "text", "id": "title", "default": "Hello"}\n]}\n{%- endschema -%}\n',
+    );
+    const tokens = await findDesignTokens(root, undefined, 'shopify');
+    const byName = new Map(tokens.map((t) => [t.name, t]));
+    expect(byName.get('settings:color_primary')).toMatchObject({
+      reference: 'settings.color_primary',
+      value: '#2563eb',
+    });
+    expect(byName.get('settings:color_bg')!.value).toBe('#ffffff');
+    expect(byName.get('settings:title')).toBeUndefined(); // text setting skipped
+    await rm(root, { recursive: true, force: true });
+  });
 });
 
 describe('buildPatches', () => {

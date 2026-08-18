@@ -56,6 +56,8 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
   const trace = options.trace ?? true;
   const mode = options.mode ?? 'local';
   const computedStyle = options.computedStyle ?? 'minimal';
+  const platform = options.platform ?? 'auto';
+  const designContext = options.designContext;
   if (mode === 'hosted' && options.repoRoot === undefined) {
     throw new Error('repoRoot must be provided explicitly in hosted mode');
   }
@@ -145,6 +147,8 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
           design: designPixels,
           mode,
           computedStyle,
+          platform,
+          designContext,
         });
         regions = traced.regions;
         traceWarnings.push(...traced.warnings);
