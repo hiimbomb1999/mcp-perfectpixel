@@ -107,8 +107,12 @@ git push --follow-tags
 
 The workflow verifies the tag matches **both** package versions, then publishes
 `@mcp-perfectpixel/core` first and `mcp-perfectpixel` second (the server
-tarball depends on the core version, `workspace:*` is rewritten on pack). The
-`NPM_TOKEN` secret must be configured in the repo for the publish steps.
+tarball depends on the core version, `workspace:*` is rewritten on pack), each
+with `--provenance` via **npm Trusted Publishing (OIDC)** — no `NPM_TOKEN`, no
+OTP. Configure the Trusted Publisher on npmjs.com for **both** packages with the
+OIDC subject `repo:<owner>/<repo>:ref:refs/tags/v*` before tagging a release.
+The workflow re-runs lint/build/test, then smoke-tests the published package
+via `npx mcp-perfectpixel@<version>` before finishing.
 
 Before the first real release:
 

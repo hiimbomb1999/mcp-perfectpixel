@@ -143,18 +143,21 @@ node examples/demo.mjs packages/server/test/fixtures/design.html \
 
 Screenshots `url`, diffs it against `designImagePath`, returns regions + artifacts.
 
-| Argument          | Type                            | Description                                                                                                           |
-| ----------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `url`             | `string` (required)             | Live URL to screenshot — `http(s)` or `file` URL.                                                                     |
-| `designImagePath` | `string` (required)             | Design image (`.png`, `.jpg`, `.jpeg`) **or an http(s) image URL** (e.g. a Figma export link).                        |
-| `viewport`        | `{width, height}`               | CSS-pixel viewport. Defaults to the design image's dimensions.                                                        |
-| `outputDir`       | `string`                        | Where to write artifacts. Defaults to a fresh temp dir.                                                               |
-| `waitForSelector` | `string`                        | CSS selector to wait for before screenshotting.                                                                       |
-| `waitMs`          | `number`                        | Extra settle time after load, in ms (≤ 60s).                                                                          |
-| `diffThreshold`   | `number` (0–1)                  | pixelmatch sensitivity. Smaller = more sensitive. Default `0.1`.                                                      |
-| `repoRoot`        | `string`                        | Codebase root for source tracing. Defaults to the server cwd (required in `hosted` mode).                             |
-| `mode`            | `"local" \| "hosted"`           | Trust boundary: `local` (default) allows `file://`/local paths; `hosted` blocks them + private networks (SSRF guard). |
-| `computedStyle`   | `"minimal" \| "full" \| "none"` | Computed-style verbosity per region. `minimal` (default) keeps color candidates + values differing from the parent.   |
+| Argument              | Type                                                                          | Description                                                                                                                                                                                     |
+| --------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `url`                 | `string` (required)                                                           | Live URL to screenshot — `http(s)` or `file` URL.                                                                                                                                               |
+| `designImagePath`     | `string` (required)                                                           | Design image (`.png`, `.jpg`, `.jpeg`) **or an http(s) image URL** (e.g. a Figma export link).                                                                                                  |
+| `viewport`            | `{width, height}`                                                             | CSS-pixel viewport. Defaults to the design image's dimensions.                                                                                                                                  |
+| `outputDir`           | `string`                                                                      | Where to write artifacts. Defaults to a fresh temp dir.                                                                                                                                         |
+| `waitForSelector`     | `string`                                                                      | CSS selector to wait for before screenshotting.                                                                                                                                                 |
+| `waitMs`              | `number`                                                                      | Extra settle time after load, in ms (≤ 60s).                                                                                                                                                    |
+| `diffThreshold`       | `number` (0–1)                                                                | pixelmatch sensitivity. Smaller = more sensitive. Default `0.1`.                                                                                                                                |
+| `repoRoot`            | `string`                                                                      | Codebase root for source tracing. Defaults to the server cwd (required in `hosted` mode).                                                                                                       |
+| `mode`                | `"local" \| "hosted"`                                                         | Trust boundary: `local` (default) allows `file://`/local paths; `hosted` blocks them + private networks (SSRF guard).                                                                           |
+| `computedStyle`       | `"minimal" \| "full" \| "none"`                                               | Computed-style verbosity per region. `minimal` (default) keeps color candidates + values differing from the parent.                                                                             |
+| `platform`            | `"shopify" \| "bigcommerce" \| "html-tailwind" \| "react" \| "vue" \| "auto"` | Codebase type — narrows source-search priority globs and enables platform token scanning (SCSS `$vars`, Shopify `{%- schema -%}` settings). Default `"auto"`: detected from `repoRoot` markers. |
+| `designContext`       | `{ scale?, tokens?, nodes? }`                                                 | Design metadata from Figma: export `scale` (1/2/3) to align the viewport with the frame; resolved `tokens` (matched before repo tokens); `nodes` bounding boxes to name each region's layer.    |
+| `textRegionThreshold` | `number` (0–1)                                                                | Extra lenient pixelmatch threshold for text-like regions (high color variance). Regions whose diff disappears under it are dropped as anti-aliasing noise. Default: unset (no filtering).       |
 
 The tool declares an **output schema**: MCP clients receive typed
 `structuredContent` (validated) plus the JSON text. Every call reports
@@ -180,6 +183,7 @@ Example result (abridged):
       "meanDelta": 0.52,
       "score": 0.58,
       "severity": "high",
+      "figmaNode": "Home/CTA/Button",
       "source": {
         "element": {
           "tag": "button",
@@ -222,6 +226,11 @@ Example result (abridged):
               "reference": "var(--color-success)",
               "kind": "css-variable"
             },
+            "figmaToken": {
+              "name": "Success/500",
+              "value": "#16a34a",
+              "kind": "color"
+            },
             "confidence": "high"
           }
         ],
@@ -253,6 +262,73 @@ Example result (abridged):
 
 **Severity:** `score = 0.6·meanDelta + 0.25·coverage + 0.15·min(1, areaRatio·10)`,
 `high ≥ 0.5`, `medium ≥ 0.2`, `low < 0.2`.
+
+### Platform presets
+
+`platform` tells the tracer which codebase it is looking at so source search and
+token scanning are prioritized correctly instead of being generic:
+
+| Platform            | What changes                                                                                                                                                     |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"shopify"`         | `{%- schema -%}` color settings in `.liquid` files become design tokens (`settings.color_primary`), and Liquid files rank first in text search.                  |
+| `"bigcommerce"`     | SCSS `$vars` (e.g. `$primary-color`) in `.scss` files become design tokens, and Stencil `templates/` is treated as source.                                       |
+| `"html-tailwind"`   | Tailwind config files are scanned for tokens; plain HTML/CSS search order.                                                                                       |
+| `"react"` / `"vue"` | Source-search ordering favors JSX/Vue SFC style blocks; `.vue` matches rank as `vue-sfc-style`.                                                                  |
+| `"auto"` (default)  | Detected from `repoRoot` markers (`.liquid` → Shopify, `stencil.conf.json` → BigCommerce, `package.json` deps → React/Vue, `tailwind.config.*` → HTML+Tailwind). |
+
+You only need to set it when the project mixes markers or the detection is
+ambiguous.
+
+### Design context (from Figma)
+
+The tool works from flat images, but the agent usually has richer design data
+available (via Figma MCP). Pass it through `designContext` — every field is
+optional and best-effort:
+
+```json
+{
+  "platform": "shopify",
+  "designImagePath": "https://figma-export/.../frame@2x.png",
+  "designContext": {
+    "scale": 2,
+    "tokens": [
+      { "name": "Success/500", "value": "#16a34a", "kind": "color" },
+      { "name": "Space/4", "value": "4px", "kind": "spacing" }
+    ],
+    "nodes": [{ "name": "Home/CTA/Button", "x": 60, "y": 130, "width": 120, "height": 36 }]
+  }
+}
+```
+
+- **`scale`** (1/2/3) — the export scale of the design image relative to the
+  Figma frame. The viewport is derived by dividing the image dimensions by the
+  scale, so the capture matches the frame and region coordinates line up with
+  Figma's node boxes. Without it, an `@2x` export would make the page capture
+  twice as wide as the frame.
+- **`tokens`** — Figma-resolved variables/styles. They are treated as ground
+  truth: when a token's color matches the design value, its **name** wins the
+  patch suggestion (`figmaToken` in the output) and a repo token matching the
+  same value is still reported alongside (`token`).
+- **`nodes`** — Figma node bounding boxes (design-image space). Each diff
+  region is annotated with `figmaNode`, the name of the layer whose box covers
+  the largest fraction of the region's bounding box (ties go to the tighter
+  node). Text-named nodes (`text|label|title|price|desc|heading|body`) also
+  feed the `textRegionThreshold` noise filter.
+
+### `textRegionThreshold` (anti-aliasing noise)
+
+A design's text and the live page's text are rarely rendered identically —
+different fonts, weights, or hinting produce small anti-aliasing differences
+that show up as noisy regions. When set, `textRegionThreshold` acts as a second,
+**more lenient** pixelmatch threshold applied only to text-like regions (high
+color variance in the design crop, or an overlapping text-named Figma node):
+any such region whose diff disappears under it is dropped as AA noise. Non-text
+regions are never affected, and the count of dropped regions is reported in
+`trace.warnings` — best-effort, never silent.
+
+```json
+{ "textRegionThreshold": 0.2 }
+```
 
 ## How it works
 
@@ -343,9 +419,13 @@ talks to Figma itself.
 
 **Workflow — "implement this design from Figma":**
 
-1. **Figma MCP** — export the node (`get_image`-style tool) → an image URL.
+1. **Figma MCP** — export the node (`get_image`-style tool) → an image URL;
+   optionally read the frame's variables/styles and node boxes.
 2. **mcp-perfectpixel** — `capture_and_diff` with `designImagePath` = that URL
-   (fetched automatically), `url` = the live page, `repoRoot` = the codebase.
+   (fetched automatically), `url` = the live page, `repoRoot` = the codebase —
+   and `designContext` (`scale`, `tokens`, `nodes`) when available so patches
+   speak the project's own token names and regions carry Figma layer names
+   (see [Design context](#design-context-from-figma)).
 3. Apply the returned regions + patches, re-run until `similarity: 1.0`.
 
 **Standalone export** (no Figma MCP needed):
@@ -377,6 +457,20 @@ node examples/demo.mjs /tmp/design.png https://localhost:3000
 - apply patches or edit files itself — it reports
   `file:line:column` + `current → suggested`, the agent decides.
 
+**Explicitly out of scope** (no `apply_patch` tool, read-only/advisory by
+design):
+
+- **No `apply_patch` tool** — this server only reports evidence; applying
+  changes is the calling agent's job (and its review loop).
+- **No ignore regions** — you cannot mark areas of the design as "dynamic
+  content" (cookie banners, live clocks, carousels) to skip them. Filter with
+  `diffThreshold`/`textRegionThreshold` or exclude the element before capture.
+- **No auth headers** — the capture sends no extra headers and sets no cookies
+  (session-aware _stylesheet_ fetching uses only the page's own context).
+- **No pseudo-element / container-query runtime evaluation** — `::before` /
+  `::after` rules never match the element, and `@container` conditions report
+  `applies: "unknown"` (there is no standards API to evaluate them per element).
+
 ## Hardening
 
 - **Cascade-correct patches** — specificity, declaration order, `!important`;
@@ -393,6 +487,9 @@ node examples/demo.mjs /tmp/design.png https://localhost:3000
 - **Honest tracing** — `trace.status`/`warnings` report failures and
   truncations; text-search matches in tests/docs/generated files are
   deprioritized.
+- **Design-context aware** — Figma tokens win patch suggestions (ground truth),
+  node boxes name each region (`figmaNode`), and text anti-aliasing noise is
+  filterable via `textRegionThreshold`.
 - **Token-friendly output** — rounded floats, trimmed computed style, shared
   repo-walk cache with parallel reads (~37% smaller payloads, ~58% faster).
 - **Secret hygiene** — `.env`/`.npmrc` gitignored; CI runs Gitleaks, lint,
@@ -409,7 +506,9 @@ node examples/demo.mjs /tmp/design.png https://localhost:3000
 - [x] **Goal 5 — OSS conventions + release pipeline** (semver from `v0.1.0`,
       publish-on-tag for both packages)
 
-The first real release needs a `v0.1.0` tag and the `NPM_TOKEN` secret — see
+Releases are cut from git tags (`v0.1.0`, `v0.1.1` published). The publish
+workflow uses **npm Trusted Publishing (OIDC) with provenance** — no `NPM_TOKEN`,
+no OTP — and smoke-tests the published package via `npx` before finishing. See
 [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Development
@@ -419,7 +518,7 @@ pnpm install
 pnpm --filter @mcp-perfectpixel/core exec playwright install chromium
 pnpm lint        # eslint + prettier
 pnpm build       # type-checked compile of both packages
-pnpm test        # 104 unit + e2e tests through the MCP stdio protocol
+pnpm test        # 132 unit + e2e tests through the MCP stdio protocol
 pnpm coverage    # vitest coverage (v8)
 ```
 
