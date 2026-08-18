@@ -11,6 +11,11 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      # Needed for npm Trusted Publishing (OIDC) — publish with `--provenance`
+      # and NO token. npm deprecated bypass-2FA granular access tokens in
+      # July 2026, so token-based publishing now requires an OTP that CI
+      # cannot provide.
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -52,16 +57,12 @@ jobs:
 
       # Core must publish first: the server tarball depends on
       # @mcp-perfectpixel/core@<version> (workspace:* is rewritten on pack).
+      # Trusted Publishing (OIDC): no NPM_TOKEN, no OTP — the npm CLI exchanges
+      # the GitHub Actions OIDC token automatically. Each package must have a
+      # trusted publisher configured on npmjs.com with subject
+      #   repo:hiimbomb1999/mcp-perfectpixel:ref:refs/tags/v*
       - name: Publish @mcp-perfectpixel/core
-        run: |
-          echo "//registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN" > .npmrc
-          pnpm --filter @mcp-perfectpixel/core publish --access public --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm --filter @mcp-perfectpixel/core publish --access public --no-git-checks --provenance
 
       - name: Publish mcp-perfectpixel
-        run: |
-          echo "//registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN" > .npmrc
-          pnpm --filter mcp-perfectpixel publish --access public --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm --filter mcp-perfectpixel publish --access public --no-git-checks --provenance
