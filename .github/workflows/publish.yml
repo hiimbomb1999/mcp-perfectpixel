@@ -23,7 +23,7 @@ jobs:
       # (single source of truth — don't also set `version:` here).
       - uses: pnpm/action-setup@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
