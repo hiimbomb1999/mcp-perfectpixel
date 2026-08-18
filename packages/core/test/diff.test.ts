@@ -2,7 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { PNG } from 'pngjs';
-import { diffImages, resizeRgba, decodePng, decodeJpg, decodeImage } from '@mcp-perfectpixel/core';
+import {
+  diffImages,
+  dropTextNoise,
+  isTextLikeRegion,
+  regionDiffersAt,
+  resizeRgba,
+  decodePng,
+  decodeJpg,
+  decodeImage,
+} from '@mcp-perfectpixel/core';
 import type { RgbaImage } from '@mcp-perfectpixel/core';
 import { encode as encodeJpeg } from 'jpeg-js';
 
@@ -191,5 +200,136 @@ describe('decodePng / decodeJpg', () => {
 
   it('reports a clear error for an unreachable design URL', async () => {
     await expect(decodeImage('http://127.0.0.1:1/nope.png')).rejects.toThrow(/Failed to fetch/);
+  });
+});
+
+describe('isTextLikeRegion', () => {
+  // Text glyphs (dark rects) on a light background — high luma variance.
+  const TEXT_DESIGN = () => {
+    const img = makeImage(100, 100, [255, 255, 255]);
+    paint(img, 20, 20, 4, 10, [32, 32, 32]);
+    paint(img, 26, 20, 4, 10, [32, 32, 32]);
+    paint(img, 32, 20, 4, 10, [32, 32, 32]);
+    return img;
+  };
+  const TEXT_REGION = { x: 20, y: 20, width: 16, height: 10 };
+
+  it('returns true for dark glyphs on a light background', () => {
+    expect(isTextLikeRegion(TEXT_DESIGN(), TEXT_REGION)).toBe(true);
+  });
+
+  it('returns false for a solid-color region', () => {
+    const img = makeImage(100, 100, [37, 99, 235]); // solid blue button
+    expect(isTextLikeRegion(img, { x: 0, y: 0, width: 100, height: 100 })).toBe(false);
+  });
+
+  it('returns false for an empty or fully transparent region', () => {
+    const img = makeImage(100, 100, [255, 255, 255]);
+    for (let i = 0; i < img.data.length; i += 4) img.data[i + 3] = 0;
+    expect(isTextLikeRegion(img, { x: 0, y: 0, width: 10, height: 10 })).toBe(false);
+  });
+});
+
+describe('regionDiffersAt', () => {
+  it('reports true for a strong diff at any threshold', () => {
+    const design = makeImage(100, 100, [255, 255, 255]);
+    const shot = makeImage(100, 100, [255, 255, 255]);
+    paint(shot, 20, 20, 10, 10, [255, 0, 0]);
+    const region = { x: 20, y: 20, width: 10, height: 10 };
+    expect(regionDiffersAt(design, shot, region, 0.1)).toBe(true);
+    expect(regionDiffersAt(design, shot, region, 0.2)).toBe(true);
+  });
+
+  it('reports true at the default threshold but false at a more lenient one (AA-like)', () => {
+    // #202020 vs #484848: 40 gray units — between 0.1 (diff) and 0.2 (no diff).
+    const design = makeImage(100, 100, [255, 255, 255]);
+    paint(design, 20, 20, 16, 10, [32, 32, 32]);
+    const shot = makeImage(100, 100, [255, 255, 255]);
+    paint(shot, 20, 20, 16, 10, [72, 72, 72]);
+    const region = { x: 20, y: 20, width: 16, height: 10 };
+    expect(regionDiffersAt(design, shot, region, 0.1)).toBe(true);
+    expect(regionDiffersAt(design, shot, region, 0.2)).toBe(false);
+  });
+});
+
+describe('dropTextNoise', () => {
+  // Text-like design: dark glyphs on white; the screenshot renders them in a
+  // slightly lighter gray (#484848) — a light AA-style difference.
+  const textDesign = () => {
+    const img = makeImage(100, 100, [255, 255, 255]);
+    paint(img, 20, 20, 4, 10, [32, 32, 32]);
+    paint(img, 26, 20, 4, 10, [32, 32, 32]);
+    paint(img, 32, 20, 4, 10, [32, 32, 32]);
+    return img;
+  };
+  const textShot = () => {
+    const img = makeImage(100, 100, [255, 255, 255]);
+    paint(img, 20, 20, 4, 10, [72, 72, 72]);
+    paint(img, 26, 20, 4, 10, [72, 72, 72]);
+    paint(img, 32, 20, 4, 10, [72, 72, 72]);
+    return img;
+  };
+  const strongShot = () => {
+    const img = makeImage(100, 100, [255, 255, 255]);
+    paint(img, 20, 20, 16, 10, [220, 38, 38]); // real content diff, not AA
+    return img;
+  };
+  const textRegion = {
+    id: 1,
+    x: 20,
+    y: 20,
+    width: 16,
+    height: 10,
+    pixelCount: 40,
+    coverage: 0.25,
+    areaRatio: 0.016,
+    meanDelta: 0.18,
+    maxDelta: 0.18,
+    score: 0.3,
+    severity: 'medium' as const,
+    source: null,
+  };
+
+  it('drops a text-like region whose diff disappears under the lenient threshold', () => {
+    const { regions, dropped } = dropTextNoise(textDesign(), textShot(), [textRegion], {
+      textThreshold: 0.2,
+    });
+    expect(dropped).toBe(1);
+    expect(regions).toEqual([]);
+  });
+
+  it('keeps a text-like region whose diff persists under the lenient threshold', () => {
+    const { regions, dropped } = dropTextNoise(textDesign(), strongShot(), [textRegion], {
+      textThreshold: 0.2,
+    });
+    expect(dropped).toBe(0);
+    expect(regions).toEqual([textRegion]);
+  });
+
+  it('keeps a non-text region even when its diff is light', () => {
+    // Solid light-gray block (low variance) with a light diff — not text.
+    const design = makeImage(100, 100, [255, 255, 255]);
+    paint(design, 20, 20, 16, 10, [220, 220, 220]);
+    const shot = makeImage(100, 100, [255, 255, 255]);
+    paint(shot, 20, 20, 16, 10, [255, 255, 255]);
+    const { regions, dropped } = dropTextNoise(design, shot, [textRegion], {
+      textThreshold: 0.2,
+    });
+    expect(dropped).toBe(0);
+    expect(regions).toHaveLength(1);
+  });
+
+  it('honors an extra isText detector (e.g. a text-named Figma node)', () => {
+    const design = makeImage(100, 100, [255, 255, 255]);
+    paint(design, 20, 20, 16, 10, [220, 220, 220]);
+    const shot = makeImage(100, 100, [255, 255, 255]);
+    paint(shot, 20, 20, 16, 10, [255, 255, 255]);
+    // Low-variance region, but the Figma node is named "Price" — treat as text.
+    const { regions, dropped } = dropTextNoise(design, shot, [textRegion], {
+      textThreshold: 0.2,
+      isText: (r) => r.x === 20, // stands in for a name pattern match
+    });
+    expect(dropped).toBe(1);
+    expect(regions).toEqual([]);
   });
 });

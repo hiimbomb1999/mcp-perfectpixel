@@ -1,5 +1,12 @@
 export { captureAndDiff, deriveViewport } from './capture.js';
-export { diffImages, findComponents, mergeComponents } from './diff.js';
+export {
+  diffImages,
+  dropTextNoise,
+  findComponents,
+  isTextLikeRegion,
+  mergeComponents,
+  regionDiffersAt,
+} from './diff.js';
 export { decodeImage, decodeJpg, decodePng, resizeRgba } from './pixels.js';
 export {
   searchSelectors,
@@ -45,7 +52,7 @@ export {
   parseSourceMap,
 } from './sourcemap.js';
 export { compareSpecificity, selectorKeyOf, specificityOf } from './css.js';
-export type { DiffAnalysis } from './diff.js';
+export type { Box2, DiffAnalysis } from './diff.js';
 export type { MatchContext, TextMatch } from './search.js';
 export type { Mode, TargetClass } from './security.js';
 export type {

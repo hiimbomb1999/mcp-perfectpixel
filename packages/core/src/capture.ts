@@ -5,8 +5,8 @@ import { performance } from 'node:perf_hooks';
 import { chromium } from 'playwright';
 import { PNG } from 'pngjs';
 import { decodeImage, decodePng, resizeRgba } from './pixels.js';
-import { diffImages } from './diff.js';
-import { traceRegions } from './trace.js';
+import { diffImages, dropTextNoise } from './diff.js';
+import { figmaNodeName, traceRegions } from './trace.js';
 import { assertViewportOk, MAX_REGIONS, MAX_WAIT_MS } from './limits.js';
 import { assertTargetAllowed } from './security.js';
 import type { CaptureOptions, DiffResult, RgbaImage } from './types.js';
@@ -35,6 +35,9 @@ const DETERMINISM_SCRIPT = `
 
 const LAUNCH_ARGS = ['--lang=en-US', '--force-prefers-reduced-motion', '--disable-dev-shm-usage'];
 
+/** Figma node names that strongly imply text content (glyph AA noise risk). */
+const TEXT_NODE_NAME = /text|label|title|price|desc|heading|body/i;
+
 /**
  * Deterministically screenshot `url` and diff it against the static design
  * image at `designImagePath`. Capture is pinned to en-US locale, UTC timezone,
@@ -51,6 +54,7 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
     diffThreshold = 0.1,
     matchThreshold = 0.001,
     navigationTimeoutMs = 30_000,
+    textRegionThreshold,
   } = options;
   const repoRoot = path.resolve(options.repoRoot ?? process.cwd());
   const trace = options.trace ?? true;
@@ -133,6 +137,36 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
     // Cap the number of diff regions (top by score) to keep tracing bounded.
     let regions = analysis.regions;
     const traceWarnings: string[] = [];
+    // Text anti-aliasing noise: when textRegionThreshold (a more lenient
+    // pixelmatch threshold) is given, drop text-like regions whose diff
+    // disappears under it — e.g. a slightly different font rendering. Figma
+    // node names matching a text pattern count as extra evidence.
+    if (
+      textRegionThreshold !== undefined &&
+      textRegionThreshold > diffThreshold &&
+      regions.length > 0
+    ) {
+      const { regions: filtered, dropped } = dropTextNoise(
+        designPixels,
+        screenshotPixels,
+        regions,
+        {
+          textThreshold: textRegionThreshold,
+          isText: designContext?.nodes?.length
+            ? (region) => {
+                const name = figmaNodeName(region, designContext?.nodes);
+                return name != null && TEXT_NODE_NAME.test(name);
+              }
+            : undefined,
+        },
+      );
+      if (dropped > 0) {
+        traceWarnings.push(
+          `dropped ${dropped} text anti-aliasing region(s) (textRegionThreshold ${textRegionThreshold})`,
+        );
+      }
+      regions = filtered;
+    }
     if (regions.length > MAX_REGIONS) {
       regions = regions.slice(0, MAX_REGIONS);
       traceWarnings.push(

@@ -85,6 +85,110 @@ export function diffImages(
   return { diffPixelCount, totalPixelCount: total, diffRatio, diffImage, regions };
 }
 
+/** A rectangular area (pixel coordinates, inclusive-exclusive). */
+export type Box2 = { x: number; y: number; width: number; height: number };
+
+/**
+ * Heuristic text detector: a region whose design crop has high luma variance
+ * AND high contrast is text-like (glyph edges against a background), where
+ * slight anti-aliasing differences are noise rather than real content diffs.
+ */
+export function isTextLikeRegion(image: RgbaImage, region: Box2): boolean {
+  const x1 = Math.max(0, Math.floor(region.x));
+  const y1 = Math.max(0, Math.floor(region.y));
+  const x2 = Math.min(image.width, Math.ceil(region.x + region.width));
+  const y2 = Math.min(image.height, Math.ceil(region.y + region.height));
+  if (x2 <= x1 || y2 <= y1) return false;
+  let sum = 0;
+  let sumSq = 0;
+  let min = 255;
+  let max = 0;
+  let n = 0;
+  const data = image.data;
+  for (let y = y1; y < y2; y++) {
+    for (let x = x1; x < x2; x++) {
+      const o = (y * image.width + x) * 4;
+      if (data[o + 3] === 0) continue; // transparent pixels don't anchor text
+      const l = 0.299 * data[o]! + 0.587 * data[o + 1]! + 0.114 * data[o + 2]!;
+      sum += l;
+      sumSq += l * l;
+      if (l < min) min = l;
+      if (l > max) max = l;
+      n++;
+    }
+  }
+  if (n < 4) return false; // too few opaque pixels to judge
+  const mean = sum / n;
+  const variance = sumSq / n - mean * mean;
+  const std = Math.sqrt(Math.max(0, variance));
+  return std >= 35 && max - min >= 100;
+}
+
+/**
+ * Whether any pixel inside the region's crop still differs under a more
+ * lenient pixelmatch threshold. Used to confirm that a region is real and not
+ * merely anti-aliasing noise from text rendering.
+ */
+export function regionDiffersAt(
+  design: RgbaImage,
+  screenshot: RgbaImage,
+  region: Box2,
+  threshold: number,
+): boolean {
+  const x1 = Math.max(0, Math.floor(region.x));
+  const y1 = Math.max(0, Math.floor(region.y));
+  const x2 = Math.min(design.width, Math.ceil(region.x + region.width));
+  const y2 = Math.min(design.height, Math.ceil(region.y + region.height));
+  const w = x2 - x1;
+  const h = y2 - y1;
+  if (w <= 0 || h <= 0) return false;
+  const cropDesign = Buffer.alloc(w * h * 4);
+  const cropShot = Buffer.alloc(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    const srcStart = ((y1 + y) * design.width + x1) * 4;
+    design.data.copy(cropDesign, y * w * 4, srcStart, srcStart + w * 4);
+    screenshot.data.copy(cropShot, y * w * 4, srcStart, srcStart + w * 4);
+  }
+  const out = Buffer.alloc(w * h * 4);
+  const count = pixelmatch(cropDesign, cropShot, out, w, h, {
+    threshold,
+    includeAA: false,
+    diffMask: true,
+  });
+  return count > 0;
+}
+
+export interface DropTextNoiseOptions {
+  /** More lenient pixelmatch threshold used to confirm text-like regions. */
+  textThreshold: number;
+  /** Extra text detector (e.g. the overlapping Figma node name matches a text pattern). */
+  isText?: (region: Box2) => boolean;
+}
+
+/**
+ * Drop text-like regions whose diff disappears under `textThreshold` — they
+ * are anti-aliasing noise (a slightly different font/weight/rendering), not
+ * real content differences. Non-text regions are never touched.
+ */
+export function dropTextNoise(
+  design: RgbaImage,
+  screenshot: RgbaImage,
+  regions: DiffRegion[],
+  options: DropTextNoiseOptions,
+): { regions: DiffRegion[]; dropped: number } {
+  const kept: DiffRegion[] = [];
+  let dropped = 0;
+  for (const region of regions) {
+    const textLike = isTextLikeRegion(design, region) || (options.isText?.(region) ?? false);
+    if (textLike && !regionDiffersAt(design, screenshot, region, options.textThreshold)) {
+      dropped++;
+    } else {
+      kept.push(region);
+    }
+  }
+  return { regions: kept, dropped };
+}
+
 interface Box {
   x1: number;
   y1: number;
