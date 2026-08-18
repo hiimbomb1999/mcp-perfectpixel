@@ -5,7 +5,13 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { PNG } from 'pngjs';
-import { assertViewportOk, captureAndDiff, decodeImage, deriveViewport, MAX_WAIT_MS } from '@mcp-perfectpixel/core';
+import {
+  assertViewportOk,
+  captureAndDiff,
+  decodeImage,
+  deriveViewport,
+  MAX_WAIT_MS,
+} from '@mcp-perfectpixel/core';
 
 function pngBuffer(): Buffer {
   const png = new PNG({ width: 4, height: 4 });

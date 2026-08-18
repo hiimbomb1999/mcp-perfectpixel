@@ -71,7 +71,12 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
 
   const design = await decodeImage(designImagePath, mode);
   assertViewportOk(design.width, design.height, 'design image');
-  const viewport = deriveViewport(design.width, design.height, options.viewport, designContext?.scale);
+  const viewport = deriveViewport(
+    design.width,
+    design.height,
+    options.viewport,
+    designContext?.scale,
+  );
   assertViewportOk(viewport.width, viewport.height);
   const designPixels: RgbaImage =
     viewport.width === design.width && viewport.height === design.height
