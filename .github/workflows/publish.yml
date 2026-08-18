@@ -17,7 +17,7 @@ jobs:
       # cannot provide.
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # pnpm version comes from the root package.json "packageManager" field
       # (single source of truth — don't also set `version:` here).
