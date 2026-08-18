@@ -66,3 +66,17 @@ jobs:
 
       - name: Publish mcp-perfectpixel
         run: pnpm --filter mcp-perfectpixel publish --access public --no-git-checks --provenance
+
+      # Regression guard: a previous release was accidentally published via
+      # plain `npm publish` from the source folder, shipping a tarball whose
+      # dependency was still "workspace:*" — broken for every consumer. Verify
+      # the freshly published server actually installs and answers the MCP
+      # initialize handshake before the workflow turns green.
+      - name: Verify published package installs and runs
+        run: |
+          sleep 15  # registry propagation
+          VERSION="$(node -p "require('./packages/server/package.json').version")"
+          {
+            printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1.0"}}}'
+            sleep 3
+          } | npx -y "mcp-perfectpixel@${VERSION}" | grep -q '"serverInfo"'
