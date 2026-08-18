@@ -13,7 +13,7 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { GitignoreMatcher } from './search.js';
-import { FileTextCache } from './fileread.js';
+import { FileTextCache, sharedFileTextCache } from './fileread.js';
 import { compareSpecificity, type Specificity } from './css.js';
 import type {
   Confidence,
@@ -150,7 +150,7 @@ export function normalizeColor(value: string): string | null {
  */
 export async function findDesignTokens(
   repoRoot: string,
-  cache: FileTextCache = new FileTextCache(),
+  cache: FileTextCache = sharedFileTextCache,
   platform?: Platform,
 ): Promise<DesignToken[]> {
   const matcher = new GitignoreMatcher(repoRoot);

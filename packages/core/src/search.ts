@@ -9,7 +9,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import ignore, { type Ignore } from 'ignore';
-import { FileTextCache } from './fileread.js';
+import { FileTextCache, sharedFileTextCache } from './fileread.js';
 import type { Platform } from './types.js';
 
 export type MatchContext =
@@ -203,7 +203,7 @@ export async function searchSelectors(
   root: string,
   selectors: string[],
   near?: string,
-  cache: FileTextCache = new FileTextCache(),
+  cache: FileTextCache = sharedFileTextCache,
   platform?: Platform,
 ): Promise<Map<string, TextMatch[]>> {
   const matcher = new GitignoreMatcher(root);

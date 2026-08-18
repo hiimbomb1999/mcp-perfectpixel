@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -109,5 +109,20 @@ describe('FileTextCache', () => {
     expect(await cache.read(dir, 'huge.bin')).toBeNull();
     expect(await cache.read(dir, 'img.png')).toBeNull();
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it('serves repeated reads from cache and invalidates on mtime change (session cache)', async () => {
+    const readFn = vi.fn(async () => Buffer.from('hello'));
+    let mtime = 1;
+    const statFn = vi.fn(async () => ({ size: 5, mtimeMs: mtime }));
+    const cache = new FileTextCache(readFn, statFn);
+
+    expect(await cache.read('/repo', 'a.txt')).toBe('hello');
+    expect(await cache.read('/repo', 'a.txt')).toBe('hello');
+    expect(readFn).toHaveBeenCalledTimes(1); // second call served from cache
+
+    mtime = 2; // file changed on disk
+    expect(await cache.read('/repo', 'a.txt')).toBe('hello');
+    expect(readFn).toHaveBeenCalledTimes(2); // re-read after invalidation
   });
 });

@@ -47,7 +47,7 @@ import {
   type SourceMapResolver,
 } from './sourcemap.js';
 import { searchSelectors, detectPlatform, type TextMatch } from './search.js';
-import { FileTextCache } from './fileread.js';
+import { FileTextCache, sharedFileTextCache } from './fileread.js';
 import {
   buildPatches,
   cascadeWinner,
@@ -403,7 +403,7 @@ export async function traceRegions(
   }
   // One shared file cache: the selector search and the token scan walk the
   // same repo, so each file is stat'ed once and read at most once.
-  const fileCache = new FileTextCache();
+  const fileCache = sharedFileTextCache;
   const searchMatches =
     searchSelectorsToRun.length > 0
       ? await searchSelectors(
