@@ -112,14 +112,15 @@ npx playwright install chromium
 
 ```toml
 [mcp_servers.mcp-perfectpixel]
-command = "/path/to/node"
-args = ["/path/to/mcp-perfectpixel/packages/server/dist/index.js"]
+command = "npx"
+args = ["-y", "mcp-perfectpixel"]
 ```
 
-(Running from source: `command` is the absolute `node` path, `args` points at
-the built server entry. Restart Codex after editing. `repoRoot` defaults to the
-session's working directory — your project — so tracing and token lookup run
-against the code you're editing.)
+(Requires Node.js ≥ 20 and `npx playwright install chromium` on the machine
+running Codex. `repoRoot` defaults to the session's working directory — your
+project — so tracing and token lookup run against the code you're editing.
+Restart Codex after editing. To run from source instead, point `command`/`args`
+at your local `node` + `packages/server/dist/index.js`.)
 
 ### Try it locally (no client needed)
 

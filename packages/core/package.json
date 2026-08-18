@@ -1,6 +1,6 @@
 {
   "name": "@mcp-perfectpixel/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Deterministic capture + pixel-diff engine for mcp-perfectpixel: screenshots a URL and diffs it against a static design image, returning grouped diff regions with severity scores.",
   "license": "MIT",
   "author": "Danh Huynh (https://github.com/hiimbomb1999)",
