@@ -10,13 +10,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # Full history so `gitleaks git` scans every commit, not just the
+      # pushed one (checkout's default shallow clone would hide older leaks).
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
-      # Secret scanning — fails the build if a leak is detected.
+      # Secret scanning — fails the build if a leak is detected. Runs the
+      # pinned gitleaks binary directly instead of gitleaks-action: that
+      # action's license check flips to "license required" (hard fail) whenever
+      # its GitHub user lookup fails or returns an unexpected type, which
+      # breaks CI even with zero leaks in the repo.
       - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -sL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp
+          /tmp/gitleaks git --redact --exit-code=1 --no-banner
 
       # pnpm version comes from the root package.json "packageManager" field
       # (single source of truth — don't also set `version:` here).

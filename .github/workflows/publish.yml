@@ -23,10 +23,16 @@ jobs:
       # (single source of truth — don't also set `version:` here).
       - uses: pnpm/action-setup@v6
 
+      # Node 24 ships npm >= 11, which is REQUIRED here: the OIDC auth exchange
+      # for Trusted Publishing lives in npm 11's publish command — npm 10
+      # (bundled with Node 22) can only sign provenance, it cannot exchange the
+      # GitHub OIDC token for publish credentials, so an anonymous publish
+      # fails with `404 '<pkg>@<ver>' is not in this registry`.
+      # No `registry-url`: setup-node would write an empty `_authToken` into
+      # .npmrc and shadow the OIDC-derived token with anonymous auth.
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
+          node-version: 24
           cache: pnpm
 
       - name: Install dependencies
@@ -55,10 +61,21 @@ jobs:
             fi
           done
 
+      # Print the OIDC environment + npm/registry state so a future publish
+      # failure is diagnosable from the log alone.
+      - name: Publish diagnostics
+        run: |
+          node --version
+          npm --version
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL:+present}"
+          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+present}"
+          npm config get registry
+          ls -la .npmrc 2>/dev/null || echo "(no .npmrc)"
+
       # Core must publish first: the server tarball depends on
       # @mcp-perfectpixel/core@<version> (workspace:* is rewritten on pack).
-      # Trusted Publishing (OIDC): no NPM_TOKEN, no OTP — the npm CLI exchanges
-      # the GitHub Actions OIDC token automatically. Each package must have a
+      # Trusted Publishing (OIDC): no NPM_TOKEN, no OTP — npm 11 exchanges the
+      # GitHub Actions OIDC token automatically. Each package must have a
       # trusted publisher configured on npmjs.com with subject
       #   repo:hiimbomb1999/mcp-perfectpixel:ref:refs/tags/v*
       - name: Publish @mcp-perfectpixel/core
@@ -74,8 +91,21 @@ jobs:
       # initialize handshake before the workflow turns green.
       - name: Verify published package installs and runs
         run: |
-          sleep 15  # registry propagation
           VERSION="$(node -p "require('./packages/server/package.json').version")"
+          # Registry propagation can lag behind a publish; wait until BOTH
+          # published versions are visible (up to ~3 min each) before testing.
+          for pkg in "@mcp-perfectpixel/core" "mcp-perfectpixel"; do
+            ok=""
+            for i in $(seq 1 18); do
+              if npm view "$pkg@$VERSION" version >/dev/null 2>&1; then ok=1; break; fi
+              sleep 10
+            done
+            if [ -z "$ok" ]; then
+              echo "ERROR: $pkg@$VERSION not visible in the registry after retries" >&2
+              exit 1
+            fi
+            echo "$pkg@$VERSION visible in registry"
+          done
           {
             printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1.0"}}}'
             sleep 3
