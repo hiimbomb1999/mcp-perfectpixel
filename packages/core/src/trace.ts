@@ -47,7 +47,7 @@ import {
   type SourceMapResolver,
 } from './sourcemap.js';
 import { searchSelectors, detectPlatform, type TextMatch } from './search.js';
-import { FileTextCache, sharedFileTextCache } from './fileread.js';
+import { sharedFileTextCache } from './fileread.js';
 import {
   buildPatches,
   cascadeWinner,
@@ -475,6 +475,7 @@ export async function traceRegions(
       patchInputs,
       picked.element.computed,
       tokens,
+      options.designContext?.tokens,
     );
     // Notes: explain when the culprit can't be patched (inherited, or not
     // declared by any matched rule) instead of silently returning nothing.

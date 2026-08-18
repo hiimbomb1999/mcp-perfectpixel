@@ -237,6 +237,56 @@ describe('buildPatches', () => {
     expect(patches[0]!.token).toBeNull();
   });
 
+  it('prefers a Figma token (designContext.tokens) as ground truth', () => {
+    const figmaTokens = [
+      { name: 'Success/500', value: '#16a34a', kind: 'color' as const },
+      { name: 'Success/700', value: '#15803d', kind: 'color' as const },
+    ];
+    const patches = buildPatches(
+      GREEN_DESIGN(),
+      REGION,
+      [rule({})],
+      COMPUTED_DIFFERS,
+      [],
+      figmaTokens,
+    );
+    expect(patches).toHaveLength(1);
+    expect(patches[0]!.suggested).toBe('Success/500');
+    expect(patches[0]!.figmaToken).toEqual({
+      name: 'Success/500',
+      value: '#16a34a',
+      kind: 'color',
+    });
+    expect(patches[0]!.token).toBeNull(); // no repo token passed
+  });
+
+  it('reports both the Figma token and the matching repo token', () => {
+    const tokens = [
+      {
+        name: '--color-success',
+        reference: 'var(--color-success)',
+        value: '#16a34a',
+        file: 'styles.css',
+        line: 2,
+        kind: 'css-variable' as const,
+      },
+    ];
+    const figmaTokens = [{ name: 'Success/500', value: '#16a34a', kind: 'color' as const }];
+    const patches = buildPatches(
+      GREEN_DESIGN(),
+      REGION,
+      [rule({})],
+      COMPUTED_DIFFERS,
+      tokens,
+      figmaTokens,
+    );
+    expect(patches).toHaveLength(1);
+    // Figma name wins the suggestion; the repo token is still reported.
+    expect(patches[0]!.suggested).toBe('Success/500');
+    expect(patches[0]!.figmaToken!.name).toBe('Success/500');
+    expect(patches[0]!.token!.reference).toBe('var(--color-success)');
+  });
+
   it('skips rules without an anchorable source', () => {
     const patches = buildPatches(
       GREEN_DESIGN(),

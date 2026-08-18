@@ -190,7 +190,10 @@ export interface PatchRuleInput {
 
 /**
  * Build at most ONE patch suggestion per region: the cascade-winning rule of
- * the single property most likely to have caused the diff.
+ * the single property most likely to have caused the diff. Tokens are matched
+ * in two layers: Figma-resolved tokens (`figmaTokens`, ground truth from the
+ * design tool) first, then repo-scanned tokens. When both match the design
+ * value, both names are reported.
  */
 export function buildPatches(
   design: RgbaImage,
@@ -198,6 +201,7 @@ export function buildPatches(
   matched: PatchRuleInput[],
   elementComputed: Record<string, string>,
   tokens: DesignToken[],
+  figmaTokens?: FigmaToken[],
 ): PatchSuggestion[] {
   const designHex = sampleDesignColor(design, region);
   if (!designHex || matched.length === 0) return [];
@@ -208,6 +212,15 @@ export function buildPatches(
     const list = tokensByValue.get(token.value) ?? [];
     list.push(token);
     tokensByValue.set(token.value, list);
+  }
+  // Figma tokens (ground truth) — only color-like values can match a hex.
+  const figmaByValue = new Map<string, FigmaToken[]>();
+  for (const ft of figmaTokens ?? []) {
+    const value = normalizeColor(ft.value);
+    if (!value) continue;
+    const list = figmaByValue.get(value) ?? [];
+    list.push(ft);
+    figmaByValue.set(value, list);
   }
 
   // Cascade winner for the chosen property.
@@ -221,6 +234,7 @@ export function buildPatches(
   const currentHex = normalizeColor(current);
   if (currentHex === null || currentHex === designHex) return [];
 
+  const figmaToken = preferFigmaToken(figmaByValue.get(designHex) ?? []);
   const token = preferToken(tokensByValue.get(designHex) ?? []);
   return [
     {
@@ -229,12 +243,19 @@ export function buildPatches(
       column: winner.source.column,
       property: declaredProp ?? chosenProp,
       current,
-      suggested: token ? token.reference : designHex,
+      // Figma token name wins as ground truth; else the repo token reference.
+      suggested: figmaToken ? figmaToken.name : token ? token.reference : designHex,
       value: designHex,
       token,
+      ...(figmaToken ? { figmaToken } : {}),
       confidence: winner.confidence,
     },
   ];
+}
+
+/** Pick the most directly usable Figma token among matches. */
+function preferFigmaToken(candidates: FigmaToken[]): FigmaToken | null {
+  return candidates[0] ?? null;
 }
 
 /**
