@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { PNG } from 'pngjs';
-import { assertViewportOk, captureAndDiff, decodeImage, MAX_WAIT_MS } from '@mcp-perfectpixel/core';
+import { assertViewportOk, captureAndDiff, decodeImage, deriveViewport, MAX_WAIT_MS } from '@mcp-perfectpixel/core';
 
 function pngBuffer(): Buffer {
   const png = new PNG({ width: 4, height: 4 });
@@ -39,6 +39,24 @@ describe('assertViewportOk', () => {
     expect(() => assertViewportOk(100_000, 100_000)).toThrow(/maximum side/);
     expect(() => assertViewportOk(5000, 5000)).toThrow(/maximum of/); // 25M pixels
     expect(() => assertViewportOk(0, 10)).toThrow(/Invalid/);
+  });
+});
+
+describe('deriveViewport (designContext.scale)', () => {
+  it('divides design dimensions by the export scale', () => {
+    expect(deriveViewport(2400, 1600, undefined, 2)).toEqual({ width: 1200, height: 800 });
+    expect(deriveViewport(3600, 2400, undefined, 3)).toEqual({ width: 1200, height: 800 });
+  });
+
+  it('keeps raw dimensions when no scale is given (backward compatible)', () => {
+    expect(deriveViewport(800, 600, undefined, undefined)).toEqual({ width: 800, height: 600 });
+  });
+
+  it('lets an explicit viewport win over scale', () => {
+    expect(deriveViewport(2400, 1600, { width: 375, height: 667 }, 2)).toEqual({
+      width: 375,
+      height: 667,
+    });
   });
 });
 

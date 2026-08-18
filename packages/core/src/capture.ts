@@ -71,7 +71,7 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
 
   const design = await decodeImage(designImagePath, mode);
   assertViewportOk(design.width, design.height, 'design image');
-  const viewport = options.viewport ?? { width: design.width, height: design.height };
+  const viewport = deriveViewport(design.width, design.height, options.viewport, designContext?.scale);
   assertViewportOk(viewport.width, viewport.height);
   const designPixels: RgbaImage =
     viewport.width === design.width && viewport.height === design.height
@@ -215,6 +215,27 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
 
 function round5(n: number): number {
   return Math.round(n * 1e5) / 1e5;
+}
+
+/**
+ * Derive the capture viewport: an explicit viewport wins; otherwise the design
+ * image dimensions divided by the Figma export scale (when given) — an image
+ * exported at 2x/3x is normalized back to the frame's CSS-pixel size.
+ */
+export function deriveViewport(
+  designWidth: number,
+  designHeight: number,
+  viewport?: { width: number; height: number },
+  scale?: number,
+): { width: number; height: number } {
+  if (viewport) return viewport;
+  if (scale && scale > 0) {
+    return {
+      width: Math.round(designWidth / scale),
+      height: Math.round(designHeight / scale),
+    };
+  }
+  return { width: designWidth, height: designHeight };
 }
 
 function encodePng(rgba: Buffer, width: number, height: number): Buffer {

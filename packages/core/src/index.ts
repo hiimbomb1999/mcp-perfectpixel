@@ -1,4 +1,4 @@
-export { captureAndDiff } from './capture.js';
+export { captureAndDiff, deriveViewport } from './capture.js';
 export { diffImages, findComponents, mergeComponents } from './diff.js';
 export { decodeImage, decodeJpg, decodePng, resizeRgba } from './pixels.js';
 export {
