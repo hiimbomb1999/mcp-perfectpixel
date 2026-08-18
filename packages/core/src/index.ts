@@ -17,7 +17,13 @@ export {
   normalizeColor,
   sampleDesignColor,
 } from './patches.js';
-export { pickElement, regionSamplePoints, responsiveNotes, trimComputedStyle } from './trace.js';
+export {
+  figmaNodeName,
+  pickElement,
+  regionSamplePoints,
+  responsiveNotes,
+  trimComputedStyle,
+} from './trace.js';
 export { FileTextCache, sharedFileTextCache } from './fileread.js';
 export { assertTargetAllowed, classifyTarget, isPrivateNetworkHost } from './security.js';
 export {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pickElement, regionSamplePoints } from '@mcp-perfectpixel/core';
+import { figmaNodeName, pickElement, regionSamplePoints } from '@mcp-perfectpixel/core';
 
 function el(overrides: Partial<{ x: number; y: number; width: number; height: number }> = {}) {
   return {
@@ -62,5 +62,47 @@ describe('pickElement', () => {
 
   it('returns null when every point is empty', () => {
     expect(pickElement(region, [null, null])).toBeNull();
+  });
+});
+
+describe('figmaNodeName', () => {
+  const REGION = { x: 10, y: 10, width: 100, height: 100 };
+  const NODES = [
+    { name: 'Hero/Title', x: 0, y: 0, width: 200, height: 40 }, // covers top half
+    { name: 'Hero/Button', x: 40, y: 40, width: 60, height: 60 }, // covers 36% of region
+    { name: 'Footer', x: 500, y: 500, width: 50, height: 50 }, // no overlap
+  ];
+
+  it('returns undefined when no nodes are provided', () => {
+    expect(figmaNodeName(REGION, undefined)).toBeUndefined();
+  });
+
+  it('returns the node with the largest overlap fraction of the region', () => {
+    // Hero/Button covers 36% of the region; Hero/Title covers 30% (top strip).
+    expect(figmaNodeName(REGION, NODES)).toBe('Hero/Button');
+  });
+
+  it('returns null when nodes exist but none overlaps', () => {
+    expect(
+      figmaNodeName(REGION, [{ name: 'Footer', x: 500, y: 500, width: 50, height: 50 }]),
+    ).toBeNull();
+  });
+
+  it('prefers the tighter node on equal overlap fractions', () => {
+    // Both nodes fully cover the region, but the second is tighter.
+    const nodes = [
+      { name: 'Frame', x: 0, y: 0, width: 500, height: 500 },
+      { name: 'Card', x: 5, y: 5, width: 200, height: 200 },
+    ];
+    expect(figmaNodeName(REGION, nodes)).toBe('Card');
+  });
+
+  it('handles a region smaller than the overlapping nodes', () => {
+    // A 1x1 region fully inside both nodes -> equal fraction, tighter wins.
+    const nodes = [
+      { name: 'Big', x: 0, y: 0, width: 500, height: 500 },
+      { name: 'Small', x: 0, y: 0, width: 50, height: 50 },
+    ];
+    expect(figmaNodeName({ x: 10, y: 10, width: 1, height: 1 }, nodes)).toBe('Small');
   });
 });

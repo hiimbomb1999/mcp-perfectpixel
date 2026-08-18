@@ -32,6 +32,7 @@ import type {
   Confidence,
   DesignContext,
   DiffRegion,
+  FigmaNode,
   Platform,
   RgbaImage,
   RegionSource,
@@ -297,6 +298,7 @@ export async function traceRegions(
   const { repoRoot, mode, computedStyle, platform } = options;
   const resolvedPlatform =
     platform === 'auto' ? ((await detectPlatform(repoRoot)) ?? undefined) : platform;
+  const figmaNodes = options.designContext?.nodes;
 
   // Sample several points per region (center + quarter points) so the element
   // is found even when the center sits on a transparent/empty spot.
@@ -431,7 +433,7 @@ export async function traceRegions(
       pointIndices.map((idx) => perPointElements[idx] ?? null),
     );
     if (!picked) {
-      out.push({ ...region, source: null });
+      out.push({ ...region, source: null, figmaNode: figmaNodeName(region, figmaNodes) });
       warnings.push(`region ${region.id}: no element found at any sample point`);
       continue;
     }
@@ -511,9 +513,49 @@ export async function traceRegions(
       ),
     );
     source.notes = notes;
-    out.push({ ...region, source });
+    out.push({ ...region, source, figmaNode: figmaNodeName(region, figmaNodes) });
   }
   return { regions: out, warnings, responsive };
+}
+
+/**
+ * Name of the Figma node (from designContext.nodes) best overlapping a diff
+ * region — the node whose box covers the largest fraction of the region's
+ * bounding box (intersection-over-region-area). Ties go to the tighter
+ * (smaller) node, then the first node. Returns `null` when nodes were given
+ * but none overlaps; `undefined` when no nodes were provided at all.
+ */
+export function figmaNodeName(
+  region: Pick<DiffRegion, 'x' | 'y' | 'width' | 'height'>,
+  nodes: FigmaNode[] | undefined,
+): string | null | undefined {
+  if (!nodes || nodes.length === 0) return undefined;
+  const regionArea = region.width * region.height;
+  if (regionArea <= 0) return null;
+  let best: FigmaNode | null = null;
+  let bestFraction = 0;
+  let bestArea = Infinity;
+  for (const node of nodes) {
+    if (node.width <= 0 || node.height <= 0) continue;
+    const w = Math.max(
+      0,
+      Math.min(region.x + region.width, node.x + node.width) - Math.max(region.x, node.x),
+    );
+    const h = Math.max(
+      0,
+      Math.min(region.y + region.height, node.y + node.height) - Math.max(region.y, node.y),
+    );
+    const overlap = w * h;
+    if (overlap <= 0) continue;
+    const fraction = overlap / regionArea;
+    const area = node.width * node.height;
+    if (fraction > bestFraction || (fraction === bestFraction && area < bestArea)) {
+      best = node;
+      bestFraction = fraction;
+      bestArea = area;
+    }
+  }
+  return best ? best.name : null;
 }
 
 /** Sample points for a region: center + quarter points, clamped to the bbox. */
