@@ -90,6 +90,11 @@ jobs:
       # the freshly published server actually installs and answers the MCP
       # initialize handshake before the workflow turns green.
       - name: Verify published package installs and runs
+        env:
+          # The initialize handshake never captures a page, so skip
+          # playwright's browser download during the npx install (keeps the
+          # cold install fast on a fresh runner).
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
         run: |
           VERSION="$(node -p "require('./packages/server/package.json').version")"
           # Registry propagation can lag behind a publish; wait until BOTH
@@ -106,7 +111,30 @@ jobs:
             fi
             echo "$pkg@$VERSION visible in registry"
           done
-          {
-            printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1.0"}}}'
-            sleep 3
-          } | npx -y "mcp-perfectpixel@${VERSION}" | grep -q '"serverInfo"'
+          # A cold npx install takes tens of seconds, and registry edges can
+          # briefly 404 a just-published version — so retry the handshake up
+          # to 3 times, keep stdin open until the server answers, and dump
+          # npx's full output on failure.
+          INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1.0"}}}'
+          for attempt in 1 2 3; do
+            echo "handshake attempt $attempt"
+            OUT="$(mktemp)"
+            (
+              printf '%s\n' "$INIT"
+              sleep 120
+            ) | npx -y "mcp-perfectpixel@${VERSION}" > "$OUT" 2>&1 &
+            NPROC=$!
+            for i in $(seq 1 120); do
+              if grep -q '"serverInfo"' "$OUT" 2>/dev/null; then
+                kill "$NPROC" 2>/dev/null || true
+                echo "MCP initialize handshake OK"
+                exit 0
+              fi
+              sleep 1
+            done
+            kill "$NPROC" 2>/dev/null || true
+            echo "attempt $attempt produced no response; npx output:" >&2
+            cat "$OUT" >&2 || true
+          done
+          echo "ERROR: no MCP serverInfo response after 3 attempts" >&2
+          exit 1
