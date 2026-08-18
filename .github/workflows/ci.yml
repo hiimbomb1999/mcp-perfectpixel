@@ -50,7 +50,7 @@ jobs:
       # Uploads the coverage report (coverage/clover.xml) to Codecov. No token
       # configured → no-op.
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
