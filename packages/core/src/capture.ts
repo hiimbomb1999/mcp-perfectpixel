@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -9,14 +9,18 @@ import { decodeImage, decodePng, resizeRgba } from './pixels.js';
 import { diffImages, dropTextNoise } from './diff.js';
 import { figmaNodeName, traceRegions } from './trace.js';
 import { assertViewportOk, MAX_REGIONS, MAX_WAIT_MS } from './limits.js';
-import { assertTargetAllowed } from './security.js';
+import { assertTargetAllowed, type Mode } from './security.js';
 import type {
   CaptureOptions,
+  DesignContext,
   DiffResult,
   MultiViewportResult,
   RgbaImage,
   TextNoiseFilter,
 } from './types.js';
+
+// Design image cache: avoids re-decoding the same image across multiple captures
+const designCache = new Map<string, { mtime: number; size: number; image: RgbaImage }>();
 
 /**
  * Kills animations/transitions and stabilizes rendering so re-captures are
@@ -80,7 +84,12 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
   assertTargetAllowed(url, mode, 'page URL');
   assertTargetAllowed(designImagePath, mode, 'design image');
 
-  const design = await decodeImage(designImagePath, mode);
+  // Validate designContext before decoding (fail fast on malformed input).
+  if (designContext) {
+    validateDesignContext(designContext);
+  }
+
+  const design = await decodeImageWithCache(designImagePath, mode);
   assertViewportOk(design.width, design.height, 'design image');
   const viewport = deriveViewport(
     design.width,
@@ -306,6 +315,107 @@ export async function captureAndDiffMultiViewport(
 
 function computeHash(data: Buffer): string {
   return createHash('sha256').update(data).digest('hex');
+}
+
+/**
+ * Decode a design image with caching. Caches by path + mtime + size to avoid
+ * re-decoding the same image across multiple captures. Only caches local files
+ * (not URLs) since URLs can change without mtime/size changes.
+ */
+async function decodeImageWithCache(imagePath: string, mode: Mode): Promise<RgbaImage> {
+  // Only cache local files (URLs can change without mtime/size changes)
+  if (/^https?:\/\//i.test(imagePath)) {
+    return decodeImage(imagePath, mode);
+  }
+
+  try {
+    const stats = await stat(imagePath);
+    const cacheKey = imagePath;
+    const cached = designCache.get(cacheKey);
+
+    if (cached && cached.mtime === stats.mtimeMs && cached.size === stats.size) {
+      return cached.image;
+    }
+
+    const image = await decodeImage(imagePath, mode);
+    designCache.set(cacheKey, {
+      mtime: stats.mtimeMs,
+      size: stats.size,
+      image,
+    });
+    return image;
+  } catch {
+    // If stat fails, fall back to non-cached decode
+    return decodeImage(imagePath, mode);
+  }
+}
+
+/**
+ * Validate designContext to catch common mistakes early (e.g., wrong coordinate
+ * system, invalid scale). Throws on invalid input, warns on suspicious values.
+ */
+function validateDesignContext(ctx: DesignContext): void {
+  // Validate scale
+  if (ctx.scale !== undefined) {
+    if (ctx.scale < 1 || ctx.scale > 3) {
+      throw new Error(
+        `designContext.scale must be 1, 2, or 3 (got ${ctx.scale}). ` +
+          `Figma exports at 1x/2x/3x scale — use the same scale you exported at.`,
+      );
+    }
+    if (!Number.isInteger(ctx.scale)) {
+      throw new Error(`designContext.scale must be an integer (got ${ctx.scale})`);
+    }
+  }
+
+  // Validate tokens
+  if (ctx.tokens) {
+    if (!Array.isArray(ctx.tokens)) {
+      throw new Error('designContext.tokens must be an array');
+    }
+    for (const token of ctx.tokens) {
+      if (!token.name || typeof token.name !== 'string') {
+        throw new Error('Each token must have a string "name" field');
+      }
+      if (!token.value || typeof token.value !== 'string') {
+        throw new Error(`Token "${token.name}" must have a string "value" field`);
+      }
+      if (!['color', 'spacing', 'radius', 'font'].includes(token.kind)) {
+        throw new Error(
+          `Token "${token.name}" has invalid kind "${token.kind}" — expected color, spacing, radius, or font`,
+        );
+      }
+    }
+  }
+
+  // Validate nodes
+  if (ctx.nodes) {
+    if (!Array.isArray(ctx.nodes)) {
+      throw new Error('designContext.nodes must be an array');
+    }
+    for (const node of ctx.nodes) {
+      if (!node.name || typeof node.name !== 'string') {
+        throw new Error('Each node must have a string "name" field');
+      }
+      if (typeof node.x !== 'number' || typeof node.y !== 'number') {
+        throw new Error(`Node "${node.name}" must have numeric x, y coordinates`);
+      }
+      if (typeof node.width !== 'number' || typeof node.height !== 'number') {
+        throw new Error(`Node "${node.name}" must have numeric width, height`);
+      }
+      if (node.width <= 0 || node.height <= 0) {
+        throw new Error(
+          `Node "${node.name}" has invalid dimensions ${node.width}x${node.height} — must be positive`,
+        );
+      }
+      if (node.x < 0 || node.y < 0) {
+        throw new Error(
+          `Node "${node.name}" has negative coordinates (${node.x}, ${node.y}) — ` +
+            `nodes should be in design-image space (top-left = 0,0)`,
+        );
+      }
+    }
+  }
 }
 
 function round5(n: number): number {

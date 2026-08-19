@@ -303,6 +303,25 @@ export async function traceRegions(
     platform === 'auto' ? ((await detectPlatform(repoRoot)) ?? undefined) : platform;
   const figmaNodes = options.designContext?.nodes;
 
+  // Warn if Figma nodes seem to be in design-image space instead of viewport space
+  if (figmaNodes && figmaNodes.length > 0) {
+    const maxNodeX = Math.max(...figmaNodes.map((n) => n.x + n.width));
+    const maxNodeY = Math.max(...figmaNodes.map((n) => n.y + n.height));
+    const scale = options.designContext?.scale ?? 1;
+    const viewportWidth = options.design.width / scale;
+    const viewportHeight = options.design.height / scale;
+
+    // If nodes extend significantly beyond viewport, they might be in design-image space
+    if (maxNodeX > viewportWidth * 1.5 || maxNodeY > viewportHeight * 1.5) {
+      warnings.push(
+        `Figma nodes extend beyond viewport (max x=${Math.round(maxNodeX)}, y=${Math.round(maxNodeY)}, ` +
+          `viewport=${Math.round(viewportWidth)}x${Math.round(viewportHeight)}) — ` +
+          `did you forget to divide node coordinates by scale (${scale})? ` +
+          `Nodes should be in viewport space, not design-image space.`,
+      );
+    }
+  }
+
   // Sample several points per region (center + quarter points) so the element
   // is found even when the center sits on a transparent/empty spot.
   const pointsPerRegion = regions.map(regionSamplePoints);

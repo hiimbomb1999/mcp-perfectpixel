@@ -11,12 +11,12 @@
  * Usage (a Figma personal access token is required):
  *
  *   FIGMA_TOKEN=figd_... node examples/figma-export.mjs \
- *     "https://www.figma.com/design/WNtRe4ND67vCwA0TvIShFk/...?node-id=1689-7871" \
+ *     "https://www.figma.com/design/FILE_KEY/...?node-id=1689-7871" \
  *     -o /tmp/design.png -f png -s 1
  *
  *   # or with an explicit file key + node id:
  *   FIGMA_TOKEN=figd_... node examples/figma-export.mjs \
- *     WNtRe4ND67vCwA0TvIShFk 1689-7871 -o /tmp/design.png
+ *     FILE_KEY 1689-7871 -o /tmp/design.png
  *
  * Options: -o <file> (default ./design.png), -f <png|jpg> (default png),
  *          -s <1|2|3> pixel scale (default 1; use 2 for high-DPI designs).
