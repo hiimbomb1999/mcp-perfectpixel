@@ -25,6 +25,21 @@ are versioned with [Changesets](https://github.com/changesets/changesets).
   `layer` field in `RuleEvidence` for correct cascade ordering.
 - **Tailwind v4 `@theme` support** — design tokens are now scanned from
   `@theme` blocks in CSS files, not just `tailwind.config.*`.
+- **Advanced layout analysis (`analyzeLayout`)** — when enabled, each diff
+  region is analyzed for spacing (`margin`/`padding`/`gap`/`alignment`) and
+  typography (`font-family`/`size`/`weight`/`line-height`/`letter-spacing`)
+  mismatches, returning `layoutAnalysis` with `expected`/`actual`/`delta`/
+  `suggestion` per issue (and Figma node/token names when available).
+- **Responsive validation (`validateResponsive`)** — when enabled together
+  with `viewports`, every breakpoint is re-captured and checked for
+  `overlap`/`overflow`/`misalignment`/`missing-element` issues, returning
+  `responsiveAnalysis` with per-viewport issues and breakpoint coverage
+  statistics.
+- **Figma integration polish** — design-image decode cache with `mtime`/`size`
+  invalidation (multi-viewport captures decode each image once), fail-fast
+  `designContext` validation, and `examples/figma-workflow.mjs` — an
+  end-to-end script that exports a Figma node, passes `scale`/`tokens`/`nodes`
+  as `designContext`, and verifies the render.
 
 ### Fixed
 

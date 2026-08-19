@@ -143,21 +143,24 @@ node examples/demo.mjs packages/server/test/fixtures/design.html \
 
 Screenshots `url`, diffs it against `designImagePath`, returns regions + artifacts.
 
-| Argument              | Type                                                                          | Description                                                                                                                                                                                     |
-| --------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `url`                 | `string` (required)                                                           | Live URL to screenshot — `http(s)` or `file` URL.                                                                                                                                               |
-| `designImagePath`     | `string` (required)                                                           | Design image (`.png`, `.jpg`, `.jpeg`) **or an http(s) image URL** (e.g. a Figma export link).                                                                                                  |
-| `viewport`            | `{width, height}`                                                             | CSS-pixel viewport. Defaults to the design image's dimensions.                                                                                                                                  |
-| `outputDir`           | `string`                                                                      | Where to write artifacts. Defaults to a fresh temp dir.                                                                                                                                         |
-| `waitForSelector`     | `string`                                                                      | CSS selector to wait for before screenshotting.                                                                                                                                                 |
-| `waitMs`              | `number`                                                                      | Extra settle time after load, in ms (≤ 60s).                                                                                                                                                    |
-| `diffThreshold`       | `number` (0–1)                                                                | pixelmatch sensitivity. Smaller = more sensitive. Default `0.1`.                                                                                                                                |
-| `repoRoot`            | `string`                                                                      | Codebase root for source tracing. Defaults to the server cwd (required in `hosted` mode).                                                                                                       |
-| `mode`                | `"local" \| "hosted"`                                                         | Trust boundary: `local` (default) allows `file://`/local paths; `hosted` blocks them + private networks (SSRF guard).                                                                           |
-| `computedStyle`       | `"minimal" \| "full" \| "none"`                                               | Computed-style verbosity per region. `minimal` (default) keeps color candidates + values differing from the parent.                                                                             |
-| `platform`            | `"shopify" \| "bigcommerce" \| "html-tailwind" \| "react" \| "vue" \| "auto"` | Codebase type — narrows source-search priority globs and enables platform token scanning (SCSS `$vars`, Shopify `{%- schema -%}` settings). Default `"auto"`: detected from `repoRoot` markers. |
-| `designContext`       | `{ scale?, tokens?, nodes? }`                                                 | Design metadata from Figma: export `scale` (1/2/3) to align the viewport with the frame; resolved `tokens` (matched before repo tokens); `nodes` bounding boxes to name each region's layer.    |
-| `textRegionThreshold` | `number` (0–1)                                                                | Extra lenient pixelmatch threshold for text-like regions (high color variance). Regions whose diff disappears under it are dropped as anti-aliasing noise. Default: unset (no filtering).       |
+| Argument              | Type                                                                          | Description                                                                                                                                                                                                   |
+| --------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `url`                 | `string` (required)                                                           | Live URL to screenshot — `http(s)` or `file` URL.                                                                                                                                                             |
+| `designImagePath`     | `string` (required)                                                           | Design image (`.png`, `.jpg`, `.jpeg`) **or an http(s) image URL** (e.g. a Figma export link).                                                                                                                |
+| `viewport`            | `{width, height}`                                                             | CSS-pixel viewport. Defaults to the design image's dimensions.                                                                                                                                                |
+| `outputDir`           | `string`                                                                      | Where to write artifacts. Defaults to a fresh temp dir.                                                                                                                                                       |
+| `waitForSelector`     | `string`                                                                      | CSS selector to wait for before screenshotting.                                                                                                                                                               |
+| `waitMs`              | `number`                                                                      | Extra settle time after load, in ms (≤ 60s).                                                                                                                                                                  |
+| `diffThreshold`       | `number` (0–1)                                                                | pixelmatch sensitivity. Smaller = more sensitive. Default `0.1`.                                                                                                                                              |
+| `repoRoot`            | `string`                                                                      | Codebase root for source tracing. Defaults to the server cwd (required in `hosted` mode).                                                                                                                     |
+| `mode`                | `"local" \| "hosted"`                                                         | Trust boundary: `local` (default) allows `file://`/local paths; `hosted` blocks them + private networks (SSRF guard).                                                                                         |
+| `computedStyle`       | `"minimal" \| "full" \| "none"`                                               | Computed-style verbosity per region. `minimal` (default) keeps color candidates + values differing from the parent.                                                                                           |
+| `platform`            | `"shopify" \| "bigcommerce" \| "html-tailwind" \| "react" \| "vue" \| "auto"` | Codebase type — narrows source-search priority globs and enables platform token scanning (SCSS `$vars`, Shopify `{%- schema -%}` settings). Default `"auto"`: detected from `repoRoot` markers.               |
+| `designContext`       | `{ scale?, tokens?, nodes? }`                                                 | Design metadata from Figma: export `scale` (1/2/3) to align the viewport with the frame; resolved `tokens` (matched before repo tokens); `nodes` bounding boxes to name each region's layer.                  |
+| `textRegionThreshold` | `number` (0–1)                                                                | Extra lenient pixelmatch threshold for text-like regions (high color variance). Regions whose diff disappears under it are dropped as anti-aliasing noise. Default: unset (no filtering).                     |
+| `viewports`           | `[{width, height}]`                                                           | Multiple viewports for responsive verification. Captures run sequentially at each breakpoint and return per-viewport results + overall status + average similarity. Overrides `viewport` when both are given. |
+| `analyzeLayout`       | `boolean`                                                                     | Enable advanced layout analysis (spacing, typography, alignment) for diff regions. Returns `layoutAnalysis` in the result. Default `false`.                                                                   |
+| `validateResponsive`  | `boolean`                                                                     | Enable responsive validation across `viewports`: re-captures each breakpoint and reports `overlap`/`overflow`/`misalignment`/`missing-element` issues as `responsiveAnalysis`. Default `false`.               |
 
 The tool declares an **output schema**: MCP clients receive typed
 `structuredContent` (validated) plus the JSON text. Every call reports
@@ -330,6 +333,46 @@ regions are never affected, and the count of dropped regions is reported in
 { "textRegionThreshold": 0.2 }
 ```
 
+### Multi-viewport capture & responsive validation
+
+`viewports` turns one call into a full responsive check: the page is captured at
+every breakpoint and each result is returned (`MultiViewportResult`), with an
+overall `status` (match only when **all** viewports match) and `averageSimilarity`.
+
+Combined with `validateResponsive`, each breakpoint is also checked for real
+layout problems — `overlap`, `overflow`, `misalignment`, `missing-element` —
+returned as `responsiveAnalysis` with per-viewport issues and breakpoint
+coverage statistics:
+
+```json
+{
+  "viewports": [
+    { "width": 375, "height": 812 },
+    { "width": 768, "height": 1024 }
+  ],
+  "validateResponsive": true
+}
+```
+
+### Layout analysis (spacing, typography, alignment)
+
+`analyzeLayout` digs into each diff region that isn't a pure color problem:
+spacing mismatches (`margin`/`padding`/`gap`/`alignment`) and typography
+mismatches (`font-family`/`size`/`weight`/`line-height`/`letter-spacing`) are
+reported with `expected` vs `actual`, a pixel `delta`, the element selector, and
+a concrete `suggestion` — using Figma node/token names when
+`designContext` is available:
+
+```json
+{
+  "analyzeLayout": true,
+  "designContext": { "tokens": [/* … */], "nodes": [/* … */] }
+}
+```
+
+Both analyses are best-effort: failures surface in `trace.warnings`, never as a
+failed call.
+
 ## How it works
 
 1. **Capture** — the URL is screenshotted deterministically (animations killed,
@@ -438,6 +481,17 @@ node examples/figma-export.mjs \
 node examples/demo.mjs /tmp/design.png https://localhost:3000
 ```
 
+**End-to-end workflow script** — `examples/figma-workflow.mjs` exports a Figma
+node, reads the frame's variables and node boxes, and runs a full verification
+in one shot, passing `scale`/`tokens`/`nodes` as `designContext` so patches
+speak the project's own token names:
+
+```bash
+node examples/figma-workflow.mjs \
+  "https://www.figma.com/design/FILE_KEY/slug?node-id=1689-7871" \
+  https://localhost:3000 /path/to/repo
+```
+
 ## Design philosophy
 
 - **Structured evidence, not framework knowledge.** The server's job ends at
@@ -518,7 +572,7 @@ pnpm install
 pnpm --filter @mcp-perfectpixel/core exec playwright install chromium
 pnpm lint        # eslint + prettier
 pnpm build       # type-checked compile of both packages
-pnpm test        # 132 unit + e2e tests through the MCP stdio protocol
+pnpm test        # 138 unit + e2e tests through the MCP stdio protocol
 pnpm coverage    # vitest coverage (v8)
 ```
 
