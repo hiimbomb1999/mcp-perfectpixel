@@ -1,6 +1,6 @@
 {
   "name": "mcp-perfectpixel",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "MCP server that screenshots a live URL and diffs it against a static design image (PNG/JPG), returning grouped diff regions with severity scores. Deterministic capture: animations disabled, fonts fully loaded, fixed locale/timezone.",
   "license": "MIT",
   "author": "Danh Huynh (https://github.com/hiimbomb1999)",

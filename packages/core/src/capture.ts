@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,7 +10,13 @@ import { diffImages, dropTextNoise } from './diff.js';
 import { figmaNodeName, traceRegions } from './trace.js';
 import { assertViewportOk, MAX_REGIONS, MAX_WAIT_MS } from './limits.js';
 import { assertTargetAllowed } from './security.js';
-import type { CaptureOptions, DiffResult, RgbaImage } from './types.js';
+import type {
+  CaptureOptions,
+  DiffResult,
+  MultiViewportResult,
+  RgbaImage,
+  TextNoiseFilter,
+} from './types.js';
 
 /**
  * Kills animations/transitions and stabilizes rendering so re-captures are
@@ -96,6 +103,8 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
     );
   await mkdir(outDir, { recursive: true });
 
+  const designImageHash = computeHash(design.data);
+
   const started = performance.now();
   let browser: Awaited<ReturnType<typeof chromium.launch>>;
   try {
@@ -137,6 +146,7 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
     // Cap the number of diff regions (top by score) to keep tracing bounded.
     let regions = analysis.regions;
     const traceWarnings: string[] = [];
+    const textNoiseFilter: TextNoiseFilter = { enabled: false, droppedRegions: [] };
     // Text anti-aliasing noise: when textRegionThreshold (a more lenient
     // pixelmatch threshold) is given, drop text-like regions whose diff
     // disappears under it — e.g. a slightly different font rendering. Figma
@@ -146,6 +156,9 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
       textRegionThreshold > diffThreshold &&
       regions.length > 0
     ) {
+      textNoiseFilter.enabled = true;
+      textNoiseFilter.threshold = textRegionThreshold;
+      const droppedRegionIds = regions.map((r) => r.id);
       const { regions: filtered, dropped } = dropTextNoise(
         designPixels,
         screenshotPixels,
@@ -160,6 +173,15 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
             : undefined,
         },
       );
+      const filteredIds = new Set(filtered.map((r) => r.id));
+      for (const id of droppedRegionIds) {
+        if (!filteredIds.has(id)) {
+          textNoiseFilter.droppedRegions.push({
+            id,
+            reason: 'text anti-aliasing noise (diff disappears at textRegionThreshold)',
+          });
+        }
+      }
       if (dropped > 0) {
         traceWarnings.push(
           `dropped ${dropped} text anti-aliasing region(s) (textRegionThreshold ${textRegionThreshold})`,
@@ -243,13 +265,47 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
           ? designImagePath
           : path.resolve(designImagePath),
         designImageSource: designImagePath,
+        designImageHash,
       },
       trace: { status: traceStatus, warnings: traceWarnings },
       repoRoot,
+      ...(textNoiseFilter.enabled ? { textNoiseFilter } : {}),
     };
   } finally {
     await browser.close();
   }
+}
+
+/**
+ * Capture at multiple viewports for responsive verification. Returns results
+ * per viewport plus an overall status and average similarity.
+ */
+export async function captureAndDiffMultiViewport(
+  options: CaptureOptions,
+): Promise<MultiViewportResult> {
+  const viewports = options.viewports;
+  if (!viewports || viewports.length === 0) {
+    throw new Error('viewports must be provided for multi-viewport capture');
+  }
+
+  const results: DiffResult[] = [];
+  for (const vp of viewports) {
+    const result = await captureAndDiff({ ...options, viewport: vp, viewports: undefined });
+    results.push(result);
+  }
+
+  const allMatch = results.every((r) => r.status === 'match');
+  const avgSimilarity = results.reduce((sum, r) => sum + r.similarity, 0) / results.length;
+
+  return {
+    results,
+    status: allMatch ? 'match' : 'diff',
+    averageSimilarity: round5(avgSimilarity),
+  };
+}
+
+function computeHash(data: Buffer): string {
+  return createHash('sha256').update(data).digest('hex');
 }
 
 function round5(n: number): number {

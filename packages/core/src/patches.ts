@@ -161,6 +161,7 @@ export async function findDesignTokens(
     const lower = relPath.toLowerCase();
     if (/\.(css|scss|less|styl)$/.test(lower)) {
       scanCssVariables(text, relPath, tokens);
+      scanTailwindV4Theme(text, relPath, tokens);
       if (platform === 'bigcommerce' || /\.scss$/.test(lower)) {
         scanScssVariables(text, relPath, tokens);
       }
@@ -473,6 +474,30 @@ function scanTailwindConfig(text: string, relPath: string, tokens: DesignToken[]
       line: lineOf(text, m.index),
       kind: 'tailwind',
     });
+  }
+}
+
+function scanTailwindV4Theme(text: string, relPath: string, tokens: DesignToken[]): void {
+  const themeBlockRe = /@theme\s*\{([^}]+)\}/g;
+  let blockMatch: RegExpExecArray | null;
+  while ((blockMatch = themeBlockRe.exec(text)) !== null) {
+    const blockContent = blockMatch[1]!;
+    const blockStart = blockMatch.index + blockMatch[0].indexOf('{');
+    const propRe = /--([a-zA-Z0-9_-]+)\s*:\s*([^;]+);/g;
+    let propMatch: RegExpExecArray | null;
+    while ((propMatch = propRe.exec(blockContent)) !== null) {
+      const value = normalizeColor(propMatch[2]!);
+      if (!value) continue;
+      const name = `--${propMatch[1]!}`;
+      tokens.push({
+        name,
+        reference: `var(${name})`,
+        value,
+        file: relPath,
+        line: lineOf(text, blockStart + propMatch.index),
+        kind: 'tailwind',
+      });
+    }
   }
 }
 

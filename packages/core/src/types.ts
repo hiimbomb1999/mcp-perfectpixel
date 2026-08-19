@@ -17,6 +17,12 @@ export interface CaptureOptions {
   designImagePath: string;
   /** Viewport in CSS pixels. Defaults to the design image's dimensions. */
   viewport?: Viewport;
+  /**
+   * Multiple viewports to capture for responsive verification. When provided,
+   * captures are run sequentially at each viewport, and results are returned
+   * per viewport. Overrides `viewport` if both are given.
+   */
+  viewports?: Viewport[];
   /** Directory for artifacts (screenshot + diff image). Defaults to a fresh temp dir. */
   outputDir?: string;
   /** CSS selector to wait for before screenshotting. */
@@ -176,6 +182,8 @@ export interface RuleEvidence {
   supports: string | null;
   /** @container condition chain. Null when unconditional. */
   container: string | null;
+  /** @layer name. Null when the rule is not in a layer. */
+  layer: string | null;
   /**
    * Whether the rule's conditions currently apply: 'yes' / 'no', or 'unknown'
    * when they can't be evaluated from the outside (e.g. container queries).
@@ -212,6 +220,12 @@ export interface RegionSource {
    * unmatched rule. Never guesses a file.
    */
   notes: string[];
+  /**
+   * Layout dimension analysis when the region has no color patch — explains
+   * why the element's dimensions differ from the design (e.g. line-height
+   * rounding, box-sizing, border-width). Only present for layout-only diffs.
+   */
+  dimensionAnalysis?: DimensionAnalysis;
 }
 
 /** Design token kind, incl. SCSS variables ($var) from platforms like BigCommerce. */
@@ -288,6 +302,28 @@ export interface DiffArtifacts {
   designImagePath: string;
   /** The exact designImagePath value passed to the capture. */
   designImageSource: string;
+  /** SHA-256 hash of the design image for determinism verification. */
+  designImageHash?: string;
+}
+
+export interface DimensionAnalysis {
+  /** The layout property that differs, e.g. "height". */
+  property: string;
+  /** Computed value in the live page, e.g. "180px". */
+  computed: string;
+  /** Estimated design value from Figma node or image analysis, e.g. "~168px". */
+  designEstimate: string;
+  /** Likely cause of the difference, e.g. "line-height rounding". */
+  likelyCause: string;
+}
+
+export interface TextNoiseFilter {
+  /** Whether the filter was enabled. */
+  enabled: boolean;
+  /** The threshold used. */
+  threshold?: number;
+  /** Regions dropped as anti-aliasing noise. */
+  droppedRegions: Array<{ id: number; reason: string }>;
 }
 
 export interface DiffResult {
@@ -312,4 +348,18 @@ export interface DiffResult {
   };
   /** Codebase root used for source tracing (resolved absolute path). */
   repoRoot: string;
+  /**
+   * Text anti-aliasing noise filter results. Shows which regions were dropped
+   * and why, instead of just a warning string.
+   */
+  textNoiseFilter?: TextNoiseFilter;
+}
+
+export interface MultiViewportResult {
+  /** Results per viewport, in the same order as the input viewports. */
+  results: DiffResult[];
+  /** Overall status: 'match' only when all viewports match. */
+  status: 'match' | 'diff';
+  /** Average similarity across all viewports. */
+  averageSimilarity: number;
 }

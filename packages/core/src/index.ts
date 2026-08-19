@@ -1,4 +1,4 @@
-export { captureAndDiff, deriveViewport } from './capture.js';
+export { captureAndDiff, captureAndDiffMultiViewport, deriveViewport } from './capture.js';
 export {
   diffImages,
   dropTextNoise,
@@ -25,6 +25,7 @@ export {
   sampleDesignColor,
 } from './patches.js';
 export {
+  analyzeDimensionDiff,
   figmaNodeName,
   pickElement,
   regionSamplePoints,
@@ -63,13 +64,16 @@ export type {
   DiffArtifacts,
   DiffRegion,
   DiffResult,
+  DimensionAnalysis,
   ElementEvidence,
+  MultiViewportResult,
   PatchSuggestion,
   RegionSource,
   RgbaImage,
   RuleEvidence,
   Severity,
   SourceLocation,
+  TextNoiseFilter,
   TokenKind,
   Viewport,
 } from './types.js';

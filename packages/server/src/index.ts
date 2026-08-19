@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { captureAndDiff } from '@mcp-perfectpixel/core';
+import { captureAndDiff, captureAndDiffMultiViewport } from '@mcp-perfectpixel/core';
 
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json') as { version: string };
@@ -36,6 +36,7 @@ const ruleSchema = z.object({
   media: z.string().nullable(),
   supports: z.string().nullable(),
   container: z.string().nullable(),
+  layer: z.string().nullable(),
   applies: z.enum(['yes', 'no', 'unknown']),
   properties: z.array(z.string()),
   declared: z.record(z.string()),
@@ -92,6 +93,15 @@ const regionSchema = z.object({
       rules: z.array(ruleSchema),
       confidence: confidenceSchema,
       patches: z.array(patchSchema),
+      notes: z.array(z.string()),
+      dimensionAnalysis: z
+        .object({
+          property: z.string(),
+          computed: z.string(),
+          designEstimate: z.string(),
+          likelyCause: z.string(),
+        })
+        .optional(),
     })
     .nullable(),
 });
@@ -119,12 +129,25 @@ const outputSchema = {
     diffImagePath: z.string(),
     designImagePath: z.string(),
     designImageSource: z.string(),
+    designImageHash: z.string().optional(),
   }),
   trace: z.object({
     status: z.enum(['skipped', 'ok', 'partial', 'failed']),
     warnings: z.array(z.string()),
   }),
   repoRoot: z.string(),
+  textNoiseFilter: z
+    .object({
+      enabled: z.boolean(),
+      threshold: z.number().optional(),
+      droppedRegions: z.array(
+        z.object({
+          id: z.number(),
+          reason: z.string(),
+        }),
+      ),
+    })
+    .optional(),
 };
 
 server.registerTool(
@@ -165,6 +188,17 @@ server.registerTool(
         })
         .optional()
         .describe('Viewport in CSS pixels. Defaults to the design image dimensions.'),
+      viewports: z
+        .array(
+          z.object({
+            width: z.number().int().positive(),
+            height: z.number().int().positive(),
+          }),
+        )
+        .optional()
+        .describe(
+          'Multiple viewports to capture for responsive verification. When provided, captures are run sequentially at each viewport. Overrides viewport if both are given.',
+        ),
       outputDir: z
         .string()
         .optional()
@@ -259,10 +293,11 @@ server.registerTool(
   },
   async (args) => {
     try {
-      const result = await captureAndDiff({
+      const options = {
         url: args.url,
         designImagePath: args.designImagePath,
         viewport: args.viewport,
+        viewports: args.viewports,
         outputDir: args.outputDir,
         waitForSelector: args.waitForSelector,
         waitMs: args.waitMs,
@@ -272,7 +307,14 @@ server.registerTool(
         platform: args.platform,
         designContext: args.designContext,
         textRegionThreshold: args.textRegionThreshold,
-      });
+      };
+
+      // Use multi-viewport capture if viewports are provided.
+      const result =
+        args.viewports && args.viewports.length > 0
+          ? await captureAndDiffMultiViewport(options)
+          : await captureAndDiff(options);
+
       return {
         // Typed payload for clients that support structuredContent...
         structuredContent: { ...result } as Record<string, unknown>,
@@ -280,18 +322,40 @@ server.registerTool(
         content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
       };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       return {
+        structuredContent: {
+          status: 'error',
+          error: message,
+          similarity: 0,
+          diffPixelCount: 0,
+          totalPixelCount: 0,
+          diffRatio: 0,
+          regions: [],
+          capture: {
+            url: args.url,
+            viewport: { width: 0, height: 0 },
+            viewportSource: 'provided',
+            locale: '',
+            timezoneId: '',
+            reducedMotion: false,
+            animationsDisabled: false,
+            fontsWaited: false,
+            durationMs: 0,
+          },
+          artifacts: {
+            screenshotPath: '',
+            diffImagePath: '',
+            designImagePath: args.designImagePath,
+            designImageSource: args.designImagePath,
+          },
+          trace: { status: 'failed', warnings: [message] },
+          repoRoot: args.repoRoot ?? '',
+        } as Record<string, unknown>,
         content: [
           {
             type: 'text' as const,
-            text: JSON.stringify(
-              {
-                status: 'error',
-                error: error instanceof Error ? error.message : String(error),
-              },
-              null,
-              2,
-            ),
+            text: JSON.stringify({ status: 'error', error: message }, null, 2),
           },
         ],
         isError: true,

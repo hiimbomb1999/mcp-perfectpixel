@@ -4,6 +4,39 @@ All notable changes to this project are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases
 are versioned with [Changesets](https://github.com/changesets/changesets).
 
+## [0.1.3] - 2026-08-19
+
+### Added
+
+- **Multi-viewport capture** — new `viewports` parameter accepts an array of
+  `{width, height}` objects for responsive verification across breakpoints in a
+  single call. Returns per-viewport results plus overall status and average
+  similarity.
+- **Layout dimension analysis** — when a region has no color patch (layout-only
+  diff), `dimensionAnalysis` explains why dimensions differ from the design
+  (line-height rounding, border-width, padding) instead of forcing the agent to
+  guess pixel values.
+- **Design image hash** — `artifacts.designImageHash` (SHA-256) enables
+  determinism verification and cache-busting detection.
+- **Text noise filter structured output** — `textNoiseFilter` field with
+  `droppedRegions` array shows which regions were dropped and why, instead of
+  just a warning string.
+- **CSS `@layer` support** — rules inside `@layer` blocks are tracked with a
+  `layer` field in `RuleEvidence` for correct cascade ordering.
+- **Tailwind v4 `@theme` support** — design tokens are now scanned from
+  `@theme` blocks in CSS files, not just `tailwind.config.*`.
+
+### Fixed
+
+- **Output schema missing `notes` field** — `notes` (responsive guidance,
+  inheritance explanations, culprit hints) was silently stripped from
+  `structuredContent` by Zod's default unknown-key behavior. Now included in
+  the output schema.
+- **Error response missing `structuredContent`** — when capture throws an
+  error, the response now includes a full `structuredContent` matching the
+  output schema (with zeroed defaults) so clients relying on typed output don't
+  get `undefined`.
+
 ## [0.1.2] - 2026-08-18
 
 The design-context release: verification now speaks the project's own token

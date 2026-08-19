@@ -31,6 +31,7 @@ import type { Page } from 'playwright';
 import type {
   Confidence,
   DesignContext,
+  DimensionAnalysis,
   DiffRegion,
   FigmaNode,
   Platform,
@@ -155,6 +156,8 @@ interface ParsedRule {
   media: string | null;
   supports: string | null;
   container: string | null;
+  /** CSS @layer name, if the rule is inside a @layer block. */
+  layer: string | null;
   /** Properties declared with !important. */
   important: Set<string>;
   properties: string[];
@@ -513,6 +516,21 @@ export async function traceRegions(
       ),
     );
     source.notes = notes;
+
+    // Layout dimension analysis: when there's no color patch, explain why
+    // the element's dimensions differ from the design (e.g. line-height rounding).
+    if (source.patches.length === 0) {
+      const dimAnalysis = analyzeDimensionDiff(
+        region,
+        picked.element,
+        figmaNodes,
+        options.designContext?.scale,
+      );
+      if (dimAnalysis) {
+        source.dimensionAnalysis = dimAnalysis;
+      }
+    }
+
     out.push({ ...region, source, figmaNode: figmaNodeName(region, figmaNodes) });
   }
   return { regions: out, warnings, responsive };
@@ -682,6 +700,7 @@ function buildRegionSource(
       media: rule.media,
       supports: rule.supports,
       container: rule.container,
+      layer: rule.layer,
       applies: appliesFor(rule, mediaResult, supportsResult),
       properties: rule.properties,
       declared: rule.declared,
@@ -949,6 +968,7 @@ function parseRules(cssText: string, sheetId: number): ParsedRule[] {
   const mediaStack: string[] = [];
   const supportsStack: string[] = [];
   const containerStack: string[] = [];
+  const layerStack: string[] = [];
   const chain = (stack: string[]): string | null => {
     const parts = stack.filter((c) => c !== '');
     return parts.length > 0 ? parts.join(' and ') : null;
@@ -960,6 +980,7 @@ function parseRules(cssText: string, sheetId: number): ParsedRule[] {
         if (node.name === 'media') mediaStack.push(prelude);
         else if (node.name === 'supports') supportsStack.push(prelude);
         else if (node.name === 'container') containerStack.push(prelude);
+        else if (node.name === 'layer') layerStack.push(prelude);
       } else if (node.type === 'Rule') {
         const start = node.loc?.start.offset;
         if (start === undefined) return;
@@ -1002,6 +1023,7 @@ function parseRules(cssText: string, sheetId: number): ParsedRule[] {
           media: chain(mediaStack),
           supports: chain(supportsStack),
           container: chain(containerStack),
+          layer: chain(layerStack),
           important,
           properties,
           declared,
@@ -1016,8 +1038,104 @@ function parseRules(cssText: string, sheetId: number): ParsedRule[] {
         if (node.name === 'media') mediaStack.pop();
         else if (node.name === 'supports') supportsStack.pop();
         else if (node.name === 'container') containerStack.pop();
+        else if (node.name === 'layer') layerStack.pop();
       }
     },
   });
   return out;
+}
+
+/**
+ * Analyze why an element's dimensions differ from the design. Compares the
+ * element's computed dimensions with the Figma node (if available) or the
+ * region's bounding box, and attempts to identify the likely cause (line-height
+ * rounding, box-sizing, border-width, etc.).
+ */
+export function analyzeDimensionDiff(
+  region: Pick<DiffRegion, 'x' | 'y' | 'width' | 'height'>,
+  element: { computed: Record<string, string>; rect: { width: number; height: number } },
+  figmaNodes: FigmaNode[] | undefined,
+  scale: number | undefined,
+): DimensionAnalysis | null {
+  const computedWidth = element.computed.width;
+  const computedHeight = element.computed.height;
+  if (!computedWidth || !computedHeight) return null;
+  if (computedWidth === 'auto' && computedHeight === 'auto') return null;
+
+  // Find the overlapping Figma node for design dimensions.
+  let designWidth: number | null = null;
+  let designHeight: number | null = null;
+  if (figmaNodes && figmaNodes.length > 0) {
+    const nodeName = figmaNodeName(region, figmaNodes);
+    if (nodeName) {
+      const node = figmaNodes.find((n) => n.name === nodeName);
+      if (node) {
+        designWidth = scale ? Math.round(node.width / scale) : node.width;
+        designHeight = scale ? Math.round(node.height / scale) : node.height;
+      }
+    }
+  }
+
+  // Fall back to the region's bounding box if no Figma node.
+  if (designWidth === null) designWidth = region.width;
+  if (designHeight === null) designHeight = region.height;
+
+  const actualWidth = parseFloat(computedWidth) || element.rect.width;
+  const actualHeight = parseFloat(computedHeight) || element.rect.height;
+
+  const widthDiff = Math.abs(actualWidth - designWidth);
+  const heightDiff = Math.abs(actualHeight - designHeight);
+
+  // Only analyze if there's a meaningful difference (> 2px).
+  if (widthDiff <= 2 && heightDiff <= 2) return null;
+
+  // Determine which dimension differs more.
+  const property = heightDiff >= widthDiff ? 'height' : 'width';
+  const designValue = property === 'height' ? designHeight : designWidth;
+  const actualValue = property === 'height' ? actualHeight : actualWidth;
+
+  // Attempt to identify the likely cause.
+  let likelyCause = 'unknown';
+  const lineHeight = element.computed['line-height'];
+  const fontSize = element.computed['font-size'];
+  const borderTop = parseFloat(element.computed['border-top-width'] || '0');
+  const borderBottom = parseFloat(element.computed['border-bottom-width'] || '0');
+  const paddingTop = parseFloat(element.computed['padding-top'] || '0');
+  const paddingBottom = parseFloat(element.computed['padding-bottom'] || '0');
+
+  if (lineHeight && fontSize) {
+    const lh = parseFloat(lineHeight);
+    // Check if the difference is close to a line-height multiple.
+    const lines = Math.round(actualValue / lh);
+    const expectedFromLines = lines * lh;
+    if (Math.abs(expectedFromLines - designValue) < 2) {
+      likelyCause = `line-height rounding: ${lh}px × ${lines} line(s) = ${expectedFromLines}px, design ≈ ${designValue}px`;
+    }
+  }
+
+  if (likelyCause === 'unknown' && (borderTop > 0 || borderBottom > 0)) {
+    const totalBorder = borderTop + borderBottom;
+    if (Math.abs(totalBorder - (actualValue - designValue)) < 2) {
+      likelyCause = `border-width: ${borderTop}px top + ${borderBottom}px bottom = ${totalBorder}px extra`;
+    }
+  }
+
+  if (likelyCause === 'unknown' && (paddingTop > 0 || paddingBottom > 0)) {
+    const totalPadding = paddingTop + paddingBottom;
+    if (Math.abs(totalPadding - (actualValue - designValue)) < 2) {
+      likelyCause = `padding: ${paddingTop}px top + ${paddingBottom}px bottom = ${totalPadding}px`;
+    }
+  }
+
+  if (likelyCause === 'unknown') {
+    const diff = actualValue - designValue;
+    likelyCause = `computed ${actualValue}px differs from design ~${designValue}px by ${diff > 0 ? '+' : ''}${diff}px`;
+  }
+
+  return {
+    property,
+    computed: `${actualValue}px`,
+    designEstimate: `~${designValue}px`,
+    likelyCause,
+  };
 }
