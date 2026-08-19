@@ -8,6 +8,8 @@ import { PNG } from 'pngjs';
 import { decodeImage, decodePng, resizeRgba } from './pixels.js';
 import { diffImages, dropTextNoise } from './diff.js';
 import { figmaNodeName, traceRegions } from './trace.js';
+import { analyzeLayout } from './layout.js';
+import { analyzeResponsive } from './responsive.js';
 import { assertViewportOk, MAX_REGIONS, MAX_WAIT_MS } from './limits.js';
 import { assertTargetAllowed, type Mode } from './security.js';
 import type {
@@ -232,6 +234,30 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
       }
     }
 
+    // Phase 2: Advanced layout analysis (spacing, typography, alignment)
+    let layoutAnalysis;
+    if (options.analyzeLayout && regions.length > 0) {
+      try {
+        layoutAnalysis = await analyzeLayout(page, regions, designContext);
+      } catch (error) {
+        traceWarnings.push(
+          `layout analysis failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
+    // Phase 3: Responsive design validation (if viewports provided)
+    let responsiveAnalysis;
+    if (options.validateResponsive && options.viewports && options.viewports.length > 0) {
+      try {
+        responsiveAnalysis = await analyzeResponsive(url, options.viewports, browser);
+      } catch (error) {
+        traceWarnings.push(
+          `responsive analysis failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
     const baseName = sanitize(url);
     const screenshotPath = path.join(outDir, `${baseName}-screenshot.png`);
     const diffImagePath = path.join(outDir, `${baseName}-diff.png`);
@@ -279,6 +305,8 @@ export async function captureAndDiff(options: CaptureOptions): Promise<DiffResul
       trace: { status: traceStatus, warnings: traceWarnings },
       repoRoot,
       ...(textNoiseFilter.enabled ? { textNoiseFilter } : {}),
+      ...(layoutAnalysis ? { layoutAnalysis } : {}),
+      ...(responsiveAnalysis ? { responsiveAnalysis } : {}),
     };
   } finally {
     await browser.close();

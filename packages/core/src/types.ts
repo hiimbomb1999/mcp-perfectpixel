@@ -73,6 +73,18 @@ export interface CaptureOptions {
    * are dropped as anti-aliasing noise.
    */
   textRegionThreshold?: number;
+  /**
+   * Enable advanced layout analysis (spacing, typography, alignment).
+   * When true, analyzes spacing issues, typography mismatches, and alignment problems.
+   * Default: false.
+   */
+  analyzeLayout?: boolean;
+  /**
+   * Enable responsive design validation across multiple viewports.
+   * When true with viewports array, analyzes layout at each breakpoint.
+   * Default: false.
+   */
+  validateResponsive?: boolean;
 }
 
 export type Severity = 'high' | 'medium' | 'low';
@@ -326,6 +338,93 @@ export interface TextNoiseFilter {
   droppedRegions: Array<{ id: number; reason: string }>;
 }
 
+/** Spacing issue detected in layout analysis. */
+export interface SpacingIssue {
+  /** Type of spacing issue. */
+  type: 'margin' | 'padding' | 'gap' | 'alignment';
+  /** CSS property that has the issue. */
+  property: string;
+  /** Expected value from design. */
+  expected: string;
+  /** Actual value in the code. */
+  actual: string;
+  /** Difference in pixels. */
+  delta: number;
+  /** CSS selector of the element. */
+  element: string;
+  /** Figma node name if available. */
+  figmaNode?: string;
+  /** Suggested fix. */
+  suggestion: string;
+}
+
+/** Typography issue detected in text analysis. */
+export interface TypographyIssue {
+  /** CSS selector of the element. */
+  element: string;
+  /** Typography property that has the issue. */
+  property: 'font-family' | 'font-size' | 'font-weight' | 'line-height' | 'letter-spacing';
+  /** Expected value from design. */
+  expected: string;
+  /** Actual value in the code. */
+  actual: string;
+  /** Figma token name if available. */
+  figmaToken?: string;
+  /** Suggested fix. */
+  suggestion: string;
+}
+
+/** Text region with computed and design styles. */
+export interface TextRegionInfo {
+  /** Region ID. */
+  id: number;
+  /** Text content. */
+  text: string;
+  /** Computed styles from the live page. */
+  computedStyles: Record<string, string>;
+  /** Expected styles from design. */
+  designStyles: Record<string, string>;
+}
+
+/** Result of advanced layout analysis. */
+export interface LayoutAnalysis {
+  /** Spacing issues detected. */
+  spacing: {
+    issues: SpacingIssue[];
+  };
+  /** Typography issues detected. */
+  typography: {
+    issues: TypographyIssue[];
+    textRegions: TextRegionInfo[];
+  };
+}
+
+/** Responsive issue detected at a specific viewport. */
+export interface ResponsiveIssue {
+  /** Viewport where the issue occurs. */
+  viewport: Viewport;
+  /** Type of responsive issue. */
+  type: 'overlap' | 'overflow' | 'misalignment' | 'missing-element';
+  /** CSS selector of the element with the issue. */
+  element: string;
+  /** Description of the issue. */
+  description: string;
+  /** Suggested fix. */
+  suggestion: string;
+}
+
+/** Result of responsive design validation. */
+export interface ResponsiveAnalysis {
+  /** Issues detected at specific viewports. */
+  issues: ResponsiveIssue[];
+  /** Breakpoint coverage statistics. */
+  breakpointCoverage: {
+    totalBreakpoints: number;
+    passingBreakpoints: number;
+    failingBreakpoints: number;
+  };
+}
+
 export interface DiffResult {
   /** 'match' when diffRatio <= matchThreshold (default 0.001), otherwise 'diff'. */
   status: 'match' | 'diff';
@@ -353,6 +452,16 @@ export interface DiffResult {
    * and why, instead of just a warning string.
    */
   textNoiseFilter?: TextNoiseFilter;
+  /**
+   * Advanced layout analysis results (spacing, typography, alignment).
+   * Only present when analyzeLayout option is enabled.
+   */
+  layoutAnalysis?: LayoutAnalysis;
+  /**
+   * Responsive design validation results across multiple viewports.
+   * Only present when validateResponsive option is enabled with viewports.
+   */
+  responsiveAnalysis?: ResponsiveAnalysis;
 }
 
 export interface MultiViewportResult {

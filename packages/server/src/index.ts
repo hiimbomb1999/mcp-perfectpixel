@@ -148,6 +148,68 @@ const outputSchema = {
       ),
     })
     .optional(),
+  layoutAnalysis: z
+    .object({
+      spacing: z.object({
+        issues: z.array(
+          z.object({
+            type: z.enum(['margin', 'padding', 'gap', 'alignment']),
+            property: z.string(),
+            expected: z.string(),
+            actual: z.string(),
+            delta: z.number(),
+            element: z.string(),
+            figmaNode: z.string().optional(),
+            suggestion: z.string(),
+          }),
+        ),
+      }),
+      typography: z.object({
+        issues: z.array(
+          z.object({
+            element: z.string(),
+            property: z.enum([
+              'font-family',
+              'font-size',
+              'font-weight',
+              'line-height',
+              'letter-spacing',
+            ]),
+            expected: z.string(),
+            actual: z.string(),
+            figmaToken: z.string().optional(),
+            suggestion: z.string(),
+          }),
+        ),
+        textRegions: z.array(
+          z.object({
+            id: z.number(),
+            text: z.string(),
+            computedStyles: z.record(z.string()),
+            designStyles: z.record(z.string()),
+          }),
+        ),
+      }),
+    })
+    .optional(),
+  responsiveAnalysis: z
+    .object({
+      issues: z.array(
+        z.object({
+          viewport: z.object({ width: z.number(), height: z.number() }),
+          type: z.enum(['overlap', 'overflow', 'misalignment', 'missing-element']),
+          element: z.string(),
+          description: z.string(),
+          suggestion: z.string(),
+        }),
+      ),
+      breakpointCoverage: z.object({
+        totalBreakpoints: z.number(),
+        passingBreakpoints: z.number(),
+        failingBreakpoints: z.number(),
+      }),
+    })
+    .optional(),
 };
 
 server.registerTool(
@@ -288,6 +350,20 @@ server.registerTool(
           'Extra pixelmatch threshold for text-like regions (high color variance). Regions whose diff ' +
             'disappears under this more lenient threshold are dropped as anti-aliasing noise.',
         ),
+      analyzeLayout: z
+        .boolean()
+        .optional()
+        .describe(
+          'Enable advanced layout analysis (spacing, typography, alignment). When true, analyzes ' +
+            'spacing issues, typography mismatches, and alignment problems. Default: false.',
+        ),
+      validateResponsive: z
+        .boolean()
+        .optional()
+        .describe(
+          'Enable responsive design validation across multiple viewports. When true with viewports array, ' +
+            'analyzes layout at each breakpoint to detect overlaps, overflows, and misalignments. Default: false.',
+        ),
     },
     outputSchema,
   },
@@ -307,6 +383,8 @@ server.registerTool(
         platform: args.platform,
         designContext: args.designContext,
         textRegionThreshold: args.textRegionThreshold,
+        analyzeLayout: args.analyzeLayout,
+        validateResponsive: args.validateResponsive,
       };
 
       // Use multi-viewport capture if viewports are provided.

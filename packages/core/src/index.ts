@@ -32,6 +32,8 @@ export {
   responsiveNotes,
   trimComputedStyle,
 } from './trace.js';
+export { analyzeLayout } from './layout.js';
+export { analyzeResponsive } from './responsive.js';
 export { FileTextCache, sharedFileTextCache } from './fileread.js';
 export { assertTargetAllowed, classifyTarget, isPrivateNetworkHost } from './security.js';
 export {
@@ -66,14 +68,20 @@ export type {
   DiffResult,
   DimensionAnalysis,
   ElementEvidence,
+  LayoutAnalysis,
   MultiViewportResult,
   PatchSuggestion,
   RegionSource,
+  ResponsiveAnalysis,
+  ResponsiveIssue,
   RgbaImage,
   RuleEvidence,
   Severity,
   SourceLocation,
+  SpacingIssue,
   TextNoiseFilter,
+  TextRegionInfo,
   TokenKind,
+  TypographyIssue,
   Viewport,
 } from './types.js';
