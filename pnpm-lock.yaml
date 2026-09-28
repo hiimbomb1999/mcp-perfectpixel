@@ -45,8 +45,8 @@ importers:
         specifier: ^3.2.1
         version: 3.2.1
       ignore:
-        specifier: ^5.3.2
-        version: 5.3.2
+        specifier: ^7.0.10
+        version: 7.0.10
       jpeg-js:
         specifier: ^0.4.4
         version: 0.4.4
@@ -1148,8 +1148,8 @@ packages:
     resolution: {integrity: sha512-hsBTNUqQTDwkWtcdYI2i06Y/nUBEsNEDJKjWdigLvegy8kDuJAS8uRlpkkcQpyEXL0Z/pjDy5HBmMjRCJ2gq+g==}
     engines: {node: '>= 4'}
 
-  ignore@7.0.6:
-    resolution: {integrity: sha512-BAg6QkE8W+TuQLrrw0Ugr7HegXduRuuj8/ti2kSOc+jz1dmx8/WNcjr6XGnq5YpDWxFwwaavqD0+jIUOKelTsw==}
+  ignore@7.0.10:
+    resolution: {integrity: sha512-HpbUakT7xp5miBUywCHf36ZEuAJNklBJDDsGpUIjMzOSmM8ELSfA9Sa/QDPeNeqeoN31u+UTCkL4klCOVvRm4Q==}
     engines: {node: '>= 4'}
 
   import-fresh@3.3.1:
@@ -2220,7 +2220,7 @@ snapshots:
       '@typescript-eslint/utils': 8.67.0(eslint@9.39.5)(typescript@5.9.3)
       '@typescript-eslint/visitor-keys': 8.67.0
       eslint: 9.39.5
-      ignore: 7.0.6
+      ignore: 7.0.10
       natural-compare: 1.4.0
       ts-api-utils: 2.5.0(typescript@5.9.3)
       typescript: 5.9.3
@@ -2835,7 +2835,7 @@ snapshots:
 
   ignore@5.3.2: {}
 
-  ignore@7.0.6: {}
+  ignore@7.0.10: {}
 
   import-fresh@3.3.1:
     dependencies:
